@@ -253,12 +253,6 @@ Run the test suite:
 go test ./...
 ```
 
-Run the program:
-
-```sh
-go run .
-```
-
 ## License
 
 This project is released under the public domain via CC0 1.0 Universal.

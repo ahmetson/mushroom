@@ -253,6 +253,12 @@ Run the test suite:
 go test ./...
 ```
 
+## UTF-8 And Trimming
+
+Mushroom assumes strings are UTF-8. Before parsing a URL, it removes spaces,
+whitespace, and invisible UTF characters, so all traversed data is handled in a
+trimmed form.
+
 ## License
 
 This project is released under the public domain via CC0 1.0 Universal.

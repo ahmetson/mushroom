@@ -1,0 +1,9 @@
+# Build outputs
+/bin/
+/dist/
+/mushroom
+
+# Go test artifacts
+*.test
+*.out
+coverage.*

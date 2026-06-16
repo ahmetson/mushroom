@@ -24,7 +24,7 @@ compatible with existing PURL libraries.
 A Mushroom URL has the following shape:
 
 ```text
-pkg:<type>/<package-id>#<module-id>?<resource-kind>=<resource-expression>&<other-key>=<other-value>
+pkg:<type>/<package-id>#<module-id>?<resource-kind>=<resource-path>&<other-key>=<other-value>
 ```
 
 After the first `$` in a Mushroom URL, the parser treats the following text as a
@@ -50,8 +50,34 @@ Resources are key-value parameters. The resource kind can only be one of:
 - `object`: a collection of vars, state, and functions, such as a type with traits,
   a struct with methods, or an object with properties and functions.
 
-Parentheses, `()`, mark scoped evaluation. When the parser encounters them, it
-tries to evaluate that part of the resource expression.
+The value after `=` is a resource path, not a free-form expression. A resource path
+is built from path segments such as `path0`, `path0.path1`, or `path[scalar]`.
+
+A scalar can be:
+
+- `key: value`
+- a number
+- a key
+- a lambda: `(nested-path)`
+- a call: `name(args)`
+
+Lambdas are parenthesized nested paths. When the parser encounters them, the
+substrate evaluates the nested path first. Calls are functions with arguments.
+They may also include their own key-value parameters.
+
+`$` means any value in a key or value position.
+
+```text
+path0[key: $].path1[key1: ($.first())]
+path1[item: hello world].path2[item: (hello world.first())]
+```
+
+Mushroom defines two built-in call functions: `first()` and `last()`.
+
+If the resource kind is `func`, the last path segment must be a call.
+
+Parentheses, `()`, also mark scoped evaluation for function resources. When the
+parser encounters them, it tries to evaluate that part of the resource path.
 
 ```text
 pkg:$?func=fooBar
@@ -129,7 +155,7 @@ Mushroom, a substrate converts data into a traversal network of resources.
 Every substrate provides a digest function:
 
 ```text
-Digest(myceliumURL, data) -> mycelium
+Digest(myceliumURL, data, soil) -> mycelium
 ```
 
 `Digest` converts the given data into a mycelium network. The resulting
@@ -146,12 +172,17 @@ an evaluated Mushroom value.
 - `mycelium.Fruit(sporedValue)` traverses a value, finds any links inside it,
   and evaluates those links when needed.
 - `mycelium.Mineralize()` returns the data in its digested format.
+- `mycelium.MushroomURL()` returns the absolute link to the mycelium.
 
 This repository includes a built-in JSON substrate. It receives a string and
 returns a JSON mycelium.
 
 ```go
-mycelium := substrate.Digest("pkg:json$#my-app-config.json")
+soil := &mushroom.Soil{}
+mycelium, err := substrate.Digest("pkg:json$#my-app-config.json", fileContent, soil)
+if err != nil {
+	return err
+}
 ```
 
 Use `Link` to resolve a resource path without evaluating it:
@@ -235,6 +266,10 @@ endpoint = goSourceMycelium.Fruit(endpoint)
 
 Soil exposes these functions:
 
+- `soil.AddSubstrate(substrate)` validates the substrate Mushroom URL as a link
+  and registers it by its Hypha pattern so `Recognize` can find it later. For
+  example, the JSON substrate registers `pkg:json/$#$.json`, where `$` matches
+  any package id and `$.json` matches any module id ending in `.json`.
 - `soil.Germinate()` calls the substrate and digests the data at the given
   value.
 - `soil.Recognize()` detects which mycelium the given path belongs to. If none

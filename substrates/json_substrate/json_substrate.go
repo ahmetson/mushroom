@@ -133,6 +133,15 @@ func (mycelium *Mycelium) Link(path string) (string, error) {
 
 func (mycelium *Mycelium) Spore(path string) (any, error) {
 	hypha := mycelium.soil.Hypha(path, mycelium.url)
+	if !hypha.URL {
+		return path, nil
+	}
+	if !hypha.Dereference {
+		return nil, fmt.Errorf("json substrate: spore requires a dereference URL, got link %q", path)
+	}
+	if hypha.DereferenceType != mushroom.DereferenceTypeResource {
+		return nil, fmt.Errorf("json substrate: spore requires a resource dereference, got %q", hypha.DereferenceType)
+	}
 	if hypha.ResourceKind != mushroom.ResourceKindVar {
 		return nil, fmt.Errorf("json substrate: unsupported resource kind %q", hypha.ResourceKind)
 	}

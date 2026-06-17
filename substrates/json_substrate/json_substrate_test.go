@@ -147,6 +147,45 @@ func TestSporeReturnsPortVar(t *testing.T) {
 	}
 }
 
+func TestSporeReturnsSymbolic(t *testing.T) {
+	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	if err != nil {
+		t.Fatalf("Digest returned error: %v", err)
+	}
+
+	got, err := mycelium.Spore("auth_proxy")
+	if err != nil {
+		t.Fatalf("Spore returned error: %v", err)
+	}
+	if got != "auth_proxy" {
+		t.Fatalf("Spore returned %v, want %q", got, "auth_proxy")
+	}
+}
+
+func TestSporeRejectsLinkURL(t *testing.T) {
+	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	if err != nil {
+		t.Fatalf("Digest returned error: %v", err)
+	}
+
+	_, err = mycelium.Spore("pkg:$?var=port")
+	if err == nil {
+		t.Fatal("Spore returned nil error for link URL, want error")
+	}
+}
+
+func TestSporeRejectsModuleDereference(t *testing.T) {
+	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	if err != nil {
+		t.Fatalf("Digest returned error: %v", err)
+	}
+
+	_, err = mycelium.Spore("pkg:json$#*config.json")
+	if err == nil {
+		t.Fatal("Spore returned nil error for module dereference, want error")
+	}
+}
+
 func TestSporeTraversesArrayRootNameKey(t *testing.T) {
 	mycelium, err := Digest("pkg:json$#config.json", `[{"name":"alpha","key":"match"},{"name":"beta"}]`)
 	if err != nil {

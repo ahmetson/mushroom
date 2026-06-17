@@ -732,3 +732,192 @@ func TestNoPerfectionMycelium(t *testing.T) {
 		t.Fatal("Spore(handlers[$.first] without parens): expected error, got nil")
 	}
 }
+
+// noPerfMycelium is a test helper that loads noPerfection.json fresh each time
+// so mutation tests start from a clean copy.
+func loadNoPerfection(t *testing.T) *Mycelium {
+	t.Helper()
+	raw, err := os.ReadFile("noPerfection.json")
+	if err != nil {
+		t.Fatalf("ReadFile(noPerfection.json): %v", err)
+	}
+	m, err := Digest("pkg:json$#noPerfection.json", string(raw))
+	if err != nil {
+		t.Fatalf("Digest(noPerfection.json): %v", err)
+	}
+	return m
+}
+
+func TestInoculateService(t *testing.T) {
+	m := loadNoPerfection(t)
+
+	// Replace the first service (index 0) with a new map.
+	newFirst := map[string]any{"type": "Independent", "name": "replaced-first"}
+	if err := m.Inoculate("pkg:$?var=services[0]", newFirst); err != nil {
+		t.Fatalf("Inoculate(services[0]): %v", err)
+	}
+	got, err := m.Spore("pkg:$?*var=services[0]")
+	if err != nil {
+		t.Fatalf("Spore after Inoculate first: %v", err)
+	}
+	svc, ok := got.(map[string]any)
+	if !ok || svc["name"] != "replaced-first" {
+		t.Fatalf("services[0].name = %v, want %q", svc["name"], "replaced-first")
+	}
+
+	// Replace the last service (index 2) with a different map.
+	newLast := map[string]any{"type": "Independent", "name": "replaced-last"}
+	if err := m.Inoculate("pkg:$?var=services[2]", newLast); err != nil {
+		t.Fatalf("Inoculate(services[2]): %v", err)
+	}
+	got, err = m.Spore("pkg:$?*var=services[2]")
+	if err != nil {
+		t.Fatalf("Spore after Inoculate last: %v", err)
+	}
+	svc, ok = got.(map[string]any)
+	if !ok || svc["name"] != "replaced-last" {
+		t.Fatalf("services[2].name = %v, want %q", svc["name"], "replaced-last")
+	}
+
+	// Other services are unchanged.
+	got, err = m.Spore("pkg:$?*var=services[1]")
+	if err != nil {
+		t.Fatalf("Spore(services[1]) after inoculate: %v", err)
+	}
+	mid, ok := got.(map[string]any)
+	if !ok || mid["name"] != "entrypoint" {
+		t.Fatalf("services[1].name = %v, want %q (unchanged)", mid["name"], "entrypoint")
+	}
+}
+
+func TestInoculateOutboundHandlers(t *testing.T) {
+	m := loadNoPerfection(t)
+
+	// Overwrite the handlers array of the outbound named "hello-world" inside
+	// services[name:default-name-proxy].handlers[category:main].
+	newHandlers := []any{
+		map[string]any{
+			"type":     "Replier",
+			"category": "main",
+			"endpoint": map[string]any{"id": "localhost", "port": json.Number("9999")},
+		},
+	}
+	path := "pkg:$?var=services[name:default-name-proxy].handlers[category:main].outbounds[name:hello-world].handlers"
+	if err := m.Inoculate(path, newHandlers); err != nil {
+		t.Fatalf("Inoculate(outbound handlers): %v", err)
+	}
+
+	// Spore confirms the handlers were replaced.
+	got, err := m.Spore("pkg:$?*var=" + path[len("pkg:$?var="):])
+	if err != nil {
+		t.Fatalf("Spore(outbound handlers after inoculate): %v", err)
+	}
+	handlers, ok := got.([]any)
+	if !ok || len(handlers) != 1 {
+		t.Fatalf("handlers = %T (len %d), want []any of length 1", got, len(handlers))
+	}
+	h, ok := handlers[0].(map[string]any)
+	if !ok || h["type"] != "Replier" || h["category"] != "main" {
+		t.Fatalf("handler = %v, want {type:Replier, category:main}", h)
+	}
+	ep, ok := h["endpoint"].(map[string]any)
+	if !ok {
+		t.Fatalf("endpoint = %T, want map", h["endpoint"])
+	}
+	if ep["port"].(json.Number).String() != "9999" {
+		t.Fatalf("endpoint port = %v, want 9999", ep["port"])
+	}
+}
+
+func TestGraftService(t *testing.T) {
+	m := loadNoPerfection(t)
+
+	newSvc := map[string]any{"type": "Independent", "name": "grafted-service"}
+	if err := m.Graft("pkg:$?var=services", newSvc); err != nil {
+		t.Fatalf("Graft(services): %v", err)
+	}
+
+	got, err := m.Spore("pkg:$?*var=services")
+	if err != nil {
+		t.Fatalf("Spore(services) after graft: %v", err)
+	}
+	services, ok := got.([]any)
+	if !ok || len(services) != 4 {
+		t.Fatalf("len(services) = %d, want 4 after graft", len(services))
+	}
+	last, ok := services[3].(map[string]any)
+	if !ok || last["name"] != "grafted-service" {
+		t.Fatalf("services[3].name = %v, want %q", last["name"], "grafted-service")
+	}
+}
+
+func TestPruneService(t *testing.T) {
+	m := loadNoPerfection(t)
+
+	if err := m.Prune("pkg:$?var=services[name:entrypoint]"); err != nil {
+		t.Fatalf("Prune(services[name:entrypoint]): %v", err)
+	}
+
+	got, err := m.Spore("pkg:$?*var=services")
+	if err != nil {
+		t.Fatalf("Spore(services) after prune: %v", err)
+	}
+	services, ok := got.([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("len(services) = %d, want 2 after prune", len(services))
+	}
+	for i, s := range services {
+		obj := s.(map[string]any)
+		if obj["name"] == "entrypoint" {
+			t.Fatalf("services[%d] still has name %q after prune", i, "entrypoint")
+		}
+	}
+}
+
+func TestGraftAndPruneOutbound(t *testing.T) {
+	m := loadNoPerfection(t)
+
+	outboundPath := "pkg:$?var=services[name:default-name-proxy].handlers[category:main].outbounds"
+
+	// Graft a new outbound.
+	newOutbound := map[string]any{
+		"type":     "Independent",
+		"name":     "new-outbound",
+		"handlers": []any{},
+	}
+	if err := m.Graft(outboundPath, newOutbound); err != nil {
+		t.Fatalf("Graft(outbounds): %v", err)
+	}
+
+	got, err := m.Spore("pkg:$?*var=" + outboundPath[len("pkg:$?var="):])
+	if err != nil {
+		t.Fatalf("Spore(outbounds) after graft: %v", err)
+	}
+	outbounds, ok := got.([]any)
+	if !ok || len(outbounds) != 2 {
+		t.Fatalf("len(outbounds) = %d, want 2 after graft", len(outbounds))
+	}
+	added, ok := outbounds[1].(map[string]any)
+	if !ok || added["name"] != "new-outbound" {
+		t.Fatalf("outbounds[1].name = %v, want %q", added["name"], "new-outbound")
+	}
+
+	// Prune the original hello-world outbound.
+	if err := m.Prune(outboundPath + "[name:hello-world]"); err != nil {
+		t.Fatalf("Prune(outbounds[name:hello-world]): %v", err)
+	}
+
+	got, err = m.Spore("pkg:$?*var=" + outboundPath[len("pkg:$?var="):])
+	if err != nil {
+		t.Fatalf("Spore(outbounds) after prune: %v", err)
+	}
+	outbounds, ok = got.([]any)
+	if !ok || len(outbounds) != 1 {
+		t.Fatalf("len(outbounds) = %d, want 1 after prune", len(outbounds))
+	}
+	remaining, ok := outbounds[0].(map[string]any)
+	if !ok || remaining["name"] != "new-outbound" {
+		t.Fatalf("remaining outbound name = %v, want %q", remaining["name"], "new-outbound")
+	}
+}
+

@@ -274,6 +274,66 @@ Json substrate doesn't work with the file syste. The path as a package and file 
 
 Json substrates also doesn't support `object` nor `func` resource kinds. Only variables.
 
+### Mutating a JSON mycelium
+
+`json_substrate.Mycelium` exposes three extra methods — not part of the core
+`mushroom.Mycelium` interface — for in-place mutation:
+
+**`Inoculate(path, value)`** — overwrites the value at the given resource path.
+
+```go
+// Replace the first service entirely.
+mycelium.Inoculate("pkg:$?var=services[0]", newServiceMap)
+
+// Overwrite a single field on a named service.
+mycelium.Inoculate("pkg:$?var=services[name:foo].port", 9001)
+
+// Replace the handlers array of a specific outbound.
+mycelium.Inoculate(
+    "pkg:$?var=services[name:foo].handlers[category:main].outbounds[name:bar].handlers",
+    newHandlers,
+)
+```
+
+**`Graft(path, item)`** — appends an item to the array at path.
+
+```go
+// Add a new service to the end of the services array.
+mycelium.Graft("pkg:$?var=services", newServiceMap)
+
+// Add a new outbound to a specific handler.
+mycelium.Graft(
+    "pkg:$?var=services[name:foo].handlers[category:main].outbounds",
+    newOutbound,
+)
+```
+
+**`Prune(path)`** — removes all items matching the filter from their parent array.
+
+```go
+// Remove a service by name.
+mycelium.Prune("pkg:$?var=services[name:foo]")
+
+// Remove a specific outbound.
+mycelium.Prune(
+    "pkg:$?var=services[name:foo].handlers[category:main].outbounds[name:bar]",
+)
+```
+
+All three mutations are **in-memory only**. The `mushroom.Mycelium` interface is
+not changed — the methods are specific to `*json_substrate.Mycelium`.
+After mutating, call `Mineralize` to get the updated JSON string and handle
+persistence yourself:
+
+```go
+updated, _ := mycelium.Mineralize()   // returns string
+os.WriteFile("config.json", []byte(updated.(string)), 0o644)
+```
+
+Because the mutations update the same in-memory tree that `Spore`, `Link`, and
+`Fruit` read from, subsequent calls to those methods immediately reflect the
+changes — no need to re-digest.
+
 ## Development
 
 Run the test suite:

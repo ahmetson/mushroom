@@ -190,6 +190,71 @@ func (mycelium *Mycelium) Mineralize() (any, error) {
 	return string(mineralized), nil
 }
 
+// Inoculate overwrites the value at path with value.
+//
+// The path uses the same pkg:$?var=… syntax as Spore.
+// It supports:
+//   - Simple field: pkg:$?var=services[0].port — sets the port field on the first service.
+//   - Indexed element: pkg:$?var=services[0] — replaces the first service entirely.
+//   - Filtered element: pkg:$?var=services[name:foo].port — sets port on the named service.
+//   - Nested: pkg:$?var=services[name:foo].handlers[category:main].outbounds[name:bar].handlers
+//
+// The mutation is in-memory. Call SaveToFile or Mineralize to persist it.
+func (mycelium *Mycelium) Inoculate(path string, value any) error {
+	segs, err := mycelium.resolveSegments(path)
+	if err != nil {
+		return err
+	}
+	parent, last, err := mycelium.navigateToParent(segs)
+	if err != nil {
+		return err
+	}
+	return applySetToParent(parent, last, value)
+}
+
+// Graft appends item to the array at path.
+//
+// The path must point to an array field (no scalar filter on the final segment).
+// Example:
+//
+//	mycelium.Graft("pkg:$?var=services", newServiceMap)
+//	mycelium.Graft("pkg:$?var=services[name:foo].handlers[category:main].outbounds", newOutbound)
+//
+// The mutation is in-memory. Call SaveToFile or Mineralize to persist it.
+func (mycelium *Mycelium) Graft(path string, item any) error {
+	segs, err := mycelium.resolveSegments(path)
+	if err != nil {
+		return err
+	}
+	parent, last, err := mycelium.navigateToParent(segs)
+	if err != nil {
+		return err
+	}
+	return applyGraftToParent(parent, last, item)
+}
+
+// Prune removes all items matching path from their parent array.
+//
+// The final path segment must include a scalar filter (key:value) to identify
+// the elements to remove. Without a filter the entire array is cleared.
+// Example:
+//
+//	mycelium.Prune("pkg:$?var=services[name:foo]")
+//	mycelium.Prune("pkg:$?var=services[name:foo].handlers[category:main].outbounds[name:bar]")
+//
+// The mutation is in-memory. Call SaveToFile or Mineralize to persist it.
+func (mycelium *Mycelium) Prune(path string) error {
+	segs, err := mycelium.resolveSegments(path)
+	if err != nil {
+		return err
+	}
+	parent, last, err := mycelium.navigateToParent(segs)
+	if err != nil {
+		return err
+	}
+	return applyPruneToParent(parent, last)
+}
+
 func (mycelium *Mycelium) MushroomURL() string {
 	return mycelium.url.String()
 }
@@ -561,6 +626,222 @@ func (mycelium *Mycelium) evalLambda(content string) (any, error) {
 		return nil, fmt.Errorf("json substrate: cannot resolve lambda %q", hypha.String())
 	}
 	return other.Spore(hypha.String())
+}
+
+// resolveSegments parses path into concrete resource-path segments,
+// resolving any lambda expressions in the process.
+func (mycelium *Mycelium) resolveSegments(path string) ([]mushroom.ResourcePathSegment, error) {
+	hypha := mycelium.soil.Hypha(path, mycelium.url)
+	resourcePath, err := mycelium.resolveResourcePath(hypha)
+	if err != nil {
+		return nil, err
+	}
+	if len(resourcePath.Segments) == 0 {
+		return nil, fmt.Errorf("json substrate: empty resource path")
+	}
+	return resourcePath.Segments, nil
+}
+
+// navigateToParent returns the direct parent container and the last segment.
+// For a single-segment path the parent is mycelium.data itself.
+func (mycelium *Mycelium) navigateToParent(segs []mushroom.ResourcePathSegment) (any, mushroom.ResourcePathSegment, error) {
+	if len(segs) == 1 {
+		return mycelium.data, segs[0], nil
+	}
+	parentPath := mushroom.ResourcePath{Segments: segs[:len(segs)-1]}
+	parent, err := lookup(mycelium.data, parentPath)
+	if err != nil {
+		return nil, mushroom.ResourcePathSegment{}, fmt.Errorf("json substrate: parent path: %w", err)
+	}
+	return parent, segs[len(segs)-1], nil
+}
+
+// applySetToParent sets value at the location identified by seg within parent.
+// parent may be a map[string]any or a []any (from a prior filter returning
+// multiple matches); in the latter case the set is applied to every map element.
+func applySetToParent(parent any, seg mushroom.ResourcePathSegment, value any) error {
+	switch p := parent.(type) {
+	case map[string]any:
+		return setOnMap(p, seg, value)
+	case []any:
+		found := false
+		for _, item := range p {
+			if obj, ok := item.(map[string]any); ok {
+				if err := setOnMap(obj, seg, value); err == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("json substrate: no settable element in parent array for %q", seg.Name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("json substrate: expected object or array as parent for inoculate, got %T", parent)
+	}
+}
+
+// setOnMap performs the actual write on a map parent.
+// For a name-only segment it sets the field directly.
+// For a name + scalar it navigates into the named array and replaces the element
+// identified by the scalar.
+func setOnMap(parent map[string]any, seg mushroom.ResourcePathSegment, value any) error {
+	if seg.Name == "" {
+		return fmt.Errorf("json substrate: segment name required for inoculate")
+	}
+	if len(seg.Scalars) == 0 {
+		parent[seg.Name] = value
+		return nil
+	}
+	if len(seg.Scalars) != 1 {
+		return fmt.Errorf("json substrate: inoculate supports exactly one scalar on the last segment, got %d", len(seg.Scalars))
+	}
+	field, ok := parent[seg.Name]
+	if !ok {
+		return fmt.Errorf("json substrate: field %q not found", seg.Name)
+	}
+	items, ok := field.([]any)
+	if !ok {
+		return fmt.Errorf("json substrate: field %q must be an array for indexed inoculate (got %T)", seg.Name, field)
+	}
+	return setByScalar(items, seg.Name, seg.Scalars[0], value)
+}
+
+// setByScalar replaces the element(s) in items that match scalar with value.
+func setByScalar(items []any, fieldName string, scalar mushroom.ResourceScalar, value any) error {
+	switch scalar.Kind {
+	case mushroom.ResourceScalarNumber:
+		idx, err := strconv.Atoi(scalar.Value)
+		if err != nil {
+			return fmt.Errorf("json substrate: invalid index %q", scalar.Value)
+		}
+		if idx < 0 || idx >= len(items) {
+			return fmt.Errorf("json substrate: index %d out of range (len %d)", idx, len(items))
+		}
+		items[idx] = value
+		return nil
+	case mushroom.ResourceScalarKeyValue:
+		found := false
+		for i, item := range items {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			v, ok := obj[scalar.Key]
+			if !ok {
+				continue
+			}
+			if fmt.Sprint(v) == scalar.Value {
+				items[i] = value
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("json substrate: %q:%q not found in field %q", scalar.Key, scalar.Value, fieldName)
+		}
+		return nil
+	default:
+		return fmt.Errorf("json substrate: unsupported scalar kind %q for inoculate", scalar.Kind)
+	}
+}
+
+// applyGraftToParent appends item to the array identified by seg within parent.
+func applyGraftToParent(parent any, seg mushroom.ResourcePathSegment, item any) error {
+	switch p := parent.(type) {
+	case map[string]any:
+		return graftOnMap(p, seg, item)
+	case []any:
+		found := false
+		for _, elem := range p {
+			if obj, ok := elem.(map[string]any); ok {
+				if err := graftOnMap(obj, seg, item); err == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("json substrate: no graftable element in parent array for %q", seg.Name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("json substrate: expected object or array as parent for graft, got %T", parent)
+	}
+}
+
+// graftOnMap appends item to the array at parent[seg.Name].
+func graftOnMap(parent map[string]any, seg mushroom.ResourcePathSegment, item any) error {
+	if seg.Name == "" {
+		return fmt.Errorf("json substrate: segment name required for graft")
+	}
+	if len(seg.Scalars) > 0 {
+		return fmt.Errorf("json substrate: graft target segment must not have scalars")
+	}
+	var items []any
+	if existing := parent[seg.Name]; existing != nil {
+		var ok bool
+		items, ok = existing.([]any)
+		if !ok {
+			return fmt.Errorf("json substrate: field %q must be an array for graft (got %T)", seg.Name, existing)
+		}
+	}
+	parent[seg.Name] = append(items, item)
+	return nil
+}
+
+// applyPruneToParent removes elements matching seg from the array at seg.Name within parent.
+func applyPruneToParent(parent any, seg mushroom.ResourcePathSegment) error {
+	switch p := parent.(type) {
+	case map[string]any:
+		return pruneOnMap(p, seg)
+	case []any:
+		found := false
+		for _, elem := range p {
+			if obj, ok := elem.(map[string]any); ok {
+				if err := pruneOnMap(obj, seg); err == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("json substrate: no prunable element in parent array for %q", seg.Name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("json substrate: expected object or array as parent for prune, got %T", parent)
+	}
+}
+
+// pruneOnMap removes elements from parent[seg.Name] that match seg.Scalars.
+// If there are no scalars the entire array is cleared.
+func pruneOnMap(parent map[string]any, seg mushroom.ResourcePathSegment) error {
+	if seg.Name == "" {
+		return fmt.Errorf("json substrate: segment name required for prune")
+	}
+	existing, ok := parent[seg.Name]
+	if !ok {
+		return fmt.Errorf("json substrate: field %q not found", seg.Name)
+	}
+	items, ok := existing.([]any)
+	if !ok {
+		return fmt.Errorf("json substrate: field %q must be an array for prune (got %T)", seg.Name, existing)
+	}
+	if len(seg.Scalars) == 0 {
+		parent[seg.Name] = []any{}
+		return nil
+	}
+	var kept []any
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			kept = append(kept, item) // non-object elements are always kept
+			continue
+		}
+		if !matchesScalars(obj, seg.Scalars) {
+			kept = append(kept, item)
+		}
+	}
+	parent[seg.Name] = kept
+	return nil
 }
 
 func matchesScalars(object map[string]any, scalars []mushroom.ResourceScalar) bool {

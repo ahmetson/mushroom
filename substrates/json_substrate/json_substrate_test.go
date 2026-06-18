@@ -147,7 +147,7 @@ func TestSporeReturnsJSONValue(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	got, err := mycelium.Spore("pkg:$?*var=services[0].port")
+	got, err := mycelium.Spore("*pkg:$?var=services[0].port")
 	if err != nil {
 		t.Fatalf("Spore returned error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestSporeReturnsPortVar(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	got, err := mycelium.Spore("pkg:$?*var=port")
+	got, err := mycelium.Spore("*pkg:$?var=port")
 	if err != nil {
 		t.Fatalf("Spore returned error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSporeTraversesArrayRootNameKey(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	got, err := mycelium.Spore("pkg:$?*var=name[key]")
+	got, err := mycelium.Spore("*pkg:$?var=name[key]")
 	if err != nil {
 		t.Fatalf("Spore returned error: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestSporeTraversesNestedPath(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	got, err := mycelium.Spore("pkg:$?*var=outer.inner.port")
+	got, err := mycelium.Spore("*pkg:$?var=outer.inner.port")
 	if err != nil {
 		t.Fatalf("Spore returned error: %v", err)
 	}
@@ -258,13 +258,13 @@ func TestSporeTraversesNestedPath(t *testing.T) {
 func TestSporeEvaluatesSegmentLevelLambda(t *testing.T) {
 	// Lambda at segment level: (*pkg:$?var=fieldName) is resolved to the value
 	// of fieldName ("port"), which is then used as the segment name, yielding
-	// the same result as Spore("pkg:$?*var=port").
+	// the same result as Spore("*pkg:$?var=port").
 	mycelium, err := digest("pkg:json$#config.json", `{"fieldName":"port","port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	got, err := mycelium.Spore("pkg:$?*var=(*pkg:$?var=fieldName)")
+	got, err := mycelium.Spore("*pkg:$?var=(*pkg:$?var=fieldName)")
 	if err != nil {
 		t.Fatalf("Spore returned error: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestSporeEvaluatesDereferenceLambdaInKeyValueFilter(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	got, err := mycelium.Spore("pkg:$?*var=services[name:(*pkg:$?var=key)]")
+	got, err := mycelium.Spore("*pkg:$?var=services[name:(*pkg:$?var=key)]")
 	if err != nil {
 		t.Fatalf("Spore returned error: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestLinkRejectsDereference(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	if _, err := mycelium.Link("pkg:$?*var=port"); err == nil {
+	if _, err := mycelium.Link("*pkg:$?var=port"); err == nil {
 		t.Fatal("Link returned nil error, want dereference error")
 	}
 }
@@ -457,7 +457,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	if _, err := noPerfMycelium.Link("pkg:$?var=services"); err != nil {
 		t.Fatalf("Link(services): %v", err)
 	}
-	got, err := noPerfMycelium.Spore("pkg:$?*var=services")
+	got, err := noPerfMycelium.Spore("*pkg:$?var=services")
 	if err != nil {
 		t.Fatalf("Spore(services): %v", err)
 	}
@@ -473,7 +473,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	if _, err := noPerfMycelium.Link("pkg:$?var=services[$.first()]"); err != nil {
 		t.Fatalf("Link(services[$.first()]): %v", err)
 	}
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[$.first()]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[$.first()]")
 	if err != nil {
 		t.Fatalf("Spore(services[$.first()]): %v", err)
 	}
@@ -489,7 +489,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	if _, err := noPerfMycelium.Link("pkg:$?var=services[$.last()]"); err != nil {
 		t.Fatalf("Link(services[$.last()]): %v", err)
 	}
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[$.last()]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[$.last()]")
 	if err != nil {
 		t.Fatalf("Spore(services[$.last()]): %v", err)
 	}
@@ -502,7 +502,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	}
 
 	// Index 0 returns the same first element.
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[0]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[0]")
 	if err != nil {
 		t.Fatalf("Spore(services[0]): %v", err)
 	}
@@ -518,24 +518,24 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	if _, err := noPerfMycelium.Link("pkg:$?var=services[3]"); err == nil {
 		t.Fatal("Link(services[3]) returned nil error, want error for non-existent index")
 	}
-	if _, err := noPerfMycelium.Spore("pkg:$?*var=services[3]"); err == nil {
+	if _, err := noPerfMycelium.Spore("*pkg:$?var=services[3]"); err == nil {
 		t.Fatal("Spore(services[3]) returned nil error, want out-of-range error")
 	}
 
 	// Numeric indexes and $.first() / $.last() require an array.
 	// services[0].type is a plain string, so further indexing must fail.
-	if _, err := noPerfMycelium.Spore("pkg:$?*var=services[0].type[0]"); err == nil {
+	if _, err := noPerfMycelium.Spore("*pkg:$?var=services[0].type[0]"); err == nil {
 		t.Fatal("Spore(services[0].type[0]) returned nil error, want non-array error")
 	}
-	if _, err := noPerfMycelium.Spore("pkg:$?*var=services[0].type[$.first()]"); err == nil {
+	if _, err := noPerfMycelium.Spore("*pkg:$?var=services[0].type[$.first()]"); err == nil {
 		t.Fatal("Spore(services[0].type[$.first()]) returned nil error, want non-array error")
 	}
-	if _, err := noPerfMycelium.Spore("pkg:$?*var=services[0].type[$.last()]"); err == nil {
+	if _, err := noPerfMycelium.Spore("*pkg:$?var=services[0].type[$.last()]"); err == nil {
 		t.Fatal("Spore(services[0].type[$.last()]) returned nil error, want non-array error")
 	}
 
 	// Filter by type:Proxy returns both proxy services.
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[type:Proxy]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[type:Proxy]")
 	if err != nil {
 		t.Fatalf("Spore(services[type:Proxy]): %v", err)
 	}
@@ -557,7 +557,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	}
 
 	// Filter by type:Proxy then [$.last()] returns the second proxy (entrypoint).
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[type:Proxy][$.last()]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[type:Proxy][$.last()]")
 	if err != nil {
 		t.Fatalf("Spore(services[type:Proxy][$.last()]): %v", err)
 	}
@@ -573,7 +573,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	// the hello-world service's main handler via
 	// services[name:hello-world].handlers[category:main].
 	// Spore the outbound to confirm the field is still a raw dereference string.
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[0].handlers[0].outbounds[0]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[0].handlers[0].outbounds[0]")
 	if err != nil {
 		t.Fatalf("Spore(outbound): %v", err)
 	}
@@ -633,7 +633,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	// substituted as text, producing services[default-name-proxy]. That scalar is
 	// a Key lookup — it looks for a field named "default-name-proxy" on each
 	// service object. No service has that field, so Spore must fail.
-	if _, err = noPerfMycelium.Spore("pkg:$?*var=services[(*pkg:$?var=services[0].name)]"); err == nil {
+	if _, err = noPerfMycelium.Spore("*pkg:$?var=services[(*pkg:$?var=services[0].name)]"); err == nil {
 		t.Fatal("Spore(services[(*lambda)]): expected error — substituted key 'default-name-proxy' is not a field on any service")
 	}
 
@@ -643,19 +643,19 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	// producing services[pkg:json$#noPerfection.json?var=services[0].name].
 	// The colon makes it a KeyValue filter with Key="pkg" — no service has
 	// that field, so Spore must fail.
-	if _, err = noPerfMycelium.Spore("pkg:$?*var=services[(pkg:$?var=services[0].name)]"); err == nil {
+	if _, err = noPerfMycelium.Spore("*pkg:$?var=services[(pkg:$?var=services[0].name)]"); err == nil {
 		t.Fatal("Spore(services[(non-deref lambda)]): expected error — substituted link URL is not a valid filter")
 	}
 
 	// Plain key scalar [default-name-proxy] (no colon) looks for a field NAMED
 	// "default-name-proxy" on each service object — it is NOT a name-value filter.
 	// Since no service has a field with that literal name, Spore must fail.
-	if _, err = noPerfMycelium.Spore("pkg:$?*var=services[default-name-proxy]"); err == nil {
+	if _, err = noPerfMycelium.Spore("*pkg:$?var=services[default-name-proxy]"); err == nil {
 		t.Fatal("Spore(services[default-name-proxy]): expected error — plain key looks for a field named 'default-name-proxy', not a service with that name")
 	}
 
 	// The correct way to filter by name value is the key:value form.
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[name:default-name-proxy]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[name:default-name-proxy]")
 	if err != nil {
 		t.Fatalf("Spore(services[name:default-name-proxy]): %v", err)
 	}
@@ -672,7 +672,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	// services[name:(*pkg:$?var=services[0].name)] evaluates the dereference
 	// lambda to "default-name-proxy" and then uses it as the value to filter by,
 	// returning the same service as services[name:default-name-proxy].
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[name:(*pkg:$?var=services[0].name)]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[name:(*pkg:$?var=services[0].name)]")
 	if err != nil {
 		t.Fatalf("Spore(services[name:(lambda)]): %v", err)
 	}
@@ -688,14 +688,14 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	// services[name:default-name-proxy.first()] — first() is INSIDE the bracket,
 	// so "default-name-proxy.first()" is the literal string compared against the
 	// name field. No service has that name, so the call must fail.
-	if _, err = noPerfMycelium.Spore("pkg:$?*var=services[name:default-name-proxy.first()]"); err == nil {
+	if _, err = noPerfMycelium.Spore("*pkg:$?var=services[name:default-name-proxy.first()]"); err == nil {
 		t.Fatal("Spore(services[name:default-name-proxy.first()]): expected error — value is a literal string, not a call")
 	}
 
 	// services[name:default-name-proxy].first() — first() is a SEPARATE segment
 	// after the bracket. The filter returns []any with one matching service, then
 	// first() picks its first element, yielding the service map directly.
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[name:default-name-proxy].first()")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[name:default-name-proxy].first()")
 	if err != nil {
 		t.Fatalf("Spore(services[name:default-name-proxy].first()): %v", err)
 	}
@@ -709,7 +709,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 
 	// Spore the first service. The raw data is returned as-is: the dereference
 	// string inside outbounds[0].handlers is NOT yet evaluated.
-	got, err = noPerfMycelium.Spore("pkg:$?*var=services[$.first()]")
+	got, err = noPerfMycelium.Spore("*pkg:$?var=services[$.first()]")
 	if err != nil {
 		t.Fatalf("Spore(first service): %v", err)
 	}
@@ -829,7 +829,7 @@ func TestInoculateService(t *testing.T) {
 	if err := m.Inoculate("pkg:$?var=services[0]", newFirst); err != nil {
 		t.Fatalf("Inoculate(services[0]): %v", err)
 	}
-	got, err := m.Spore("pkg:$?*var=services[0]")
+	got, err := m.Spore("*pkg:$?var=services[0]")
 	if err != nil {
 		t.Fatalf("Spore after Inoculate first: %v", err)
 	}
@@ -843,7 +843,7 @@ func TestInoculateService(t *testing.T) {
 	if err := m.Inoculate("pkg:$?var=services[2]", newLast); err != nil {
 		t.Fatalf("Inoculate(services[2]): %v", err)
 	}
-	got, err = m.Spore("pkg:$?*var=services[2]")
+	got, err = m.Spore("*pkg:$?var=services[2]")
 	if err != nil {
 		t.Fatalf("Spore after Inoculate last: %v", err)
 	}
@@ -853,7 +853,7 @@ func TestInoculateService(t *testing.T) {
 	}
 
 	// Other services are unchanged.
-	got, err = m.Spore("pkg:$?*var=services[1]")
+	got, err = m.Spore("*pkg:$?var=services[1]")
 	if err != nil {
 		t.Fatalf("Spore(services[1]) after inoculate: %v", err)
 	}
@@ -881,7 +881,7 @@ func TestInoculateOutboundHandlers(t *testing.T) {
 	}
 
 	// Spore confirms the handlers were replaced.
-	got, err := m.Spore("pkg:$?*var=" + path[len("pkg:$?var="):])
+	got, err := m.Spore("*pkg:$?var=" + path[len("pkg:$?var="):])
 	if err != nil {
 		t.Fatalf("Spore(outbound handlers after inoculate): %v", err)
 	}
@@ -910,7 +910,7 @@ func TestGraftService(t *testing.T) {
 		t.Fatalf("Graft(services): %v", err)
 	}
 
-	got, err := m.Spore("pkg:$?*var=services")
+	got, err := m.Spore("*pkg:$?var=services")
 	if err != nil {
 		t.Fatalf("Spore(services) after graft: %v", err)
 	}
@@ -931,7 +931,7 @@ func TestPruneService(t *testing.T) {
 		t.Fatalf("Prune(services[name:entrypoint]): %v", err)
 	}
 
-	got, err := m.Spore("pkg:$?*var=services")
+	got, err := m.Spore("*pkg:$?var=services")
 	if err != nil {
 		t.Fatalf("Spore(services) after prune: %v", err)
 	}
@@ -962,7 +962,7 @@ func TestGraftAndPruneOutbound(t *testing.T) {
 		t.Fatalf("Graft(outbounds): %v", err)
 	}
 
-	got, err := m.Spore("pkg:$?*var=" + outboundPath[len("pkg:$?var="):])
+	got, err := m.Spore("*pkg:$?var=" + outboundPath[len("pkg:$?var="):])
 	if err != nil {
 		t.Fatalf("Spore(outbounds) after graft: %v", err)
 	}
@@ -980,7 +980,7 @@ func TestGraftAndPruneOutbound(t *testing.T) {
 		t.Fatalf("Prune(outbounds[name:hello-world]): %v", err)
 	}
 
-	got, err = m.Spore("pkg:$?*var=" + outboundPath[len("pkg:$?var="):])
+	got, err = m.Spore("*pkg:$?var=" + outboundPath[len("pkg:$?var="):])
 	if err != nil {
 		t.Fatalf("Spore(outbounds) after prune: %v", err)
 	}

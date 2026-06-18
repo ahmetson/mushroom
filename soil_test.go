@@ -8,7 +8,7 @@ import (
 func TestHyphaDetectsMushroomURLAfterWhitespaceNormalization(t *testing.T) {
 	s := Soil{}
 
-	hypha, err := s.Hypha(" \t\n*\u200bpkg: json / github.com/ahmetson/hello-world # main ? *func = greeting() & lang = en ")
+	hypha, err := s.Hypha(" \t\n*\u200bpkg: json / github.com/ahmetson/hello-world # main ? func = greeting() & lang = en ")
 	if err != nil {
 		t.Fatalf("Hypha returned error: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestHyphaStringReturnsFullPath(t *testing.T) {
 		},
 	}
 
-	const want = "pkg:golang/github.com/ahmetson/hello-world#main?*func=greeting()&case=1&lang=en"
+	const want = "*pkg:golang/github.com/ahmetson/hello-world#main?func=greeting()&case=1&lang=en"
 	if got := hypha.String(); got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
 	}
@@ -344,31 +344,31 @@ func TestHyphaParsesOneHundredURLVariations(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		prefixDereference := i%10 == 0
 		resourceDereference := i%3 == 0
+		// All dereferences are expressed via *pkg: prefix; ?*kind= is not supported.
+		addDerefPrefix := prefixDereference || resourceDereference
 		resource := resources[i%len(resources)]
 		module := modules[i%len(modules)]
 		typ := types[i%len(types)]
 		packageID := packages[i%len(packages)]
 
-		input := fmt.Sprintf("pkg:%s/%s#%s?%s%s=%s&case=%d",
+		input := fmt.Sprintf("pkg:%s/%s#%s?%s=%s&case=%d",
 			typ,
 			packageID,
 			module,
-			derefMarker(resourceDereference),
 			resource.kind,
 			resource.value,
 			i,
 		)
 		if packageID == "$" {
-			input = fmt.Sprintf("pkg:%s$#%s?%s%s=%s&case=%d",
+			input = fmt.Sprintf("pkg:%s$#%s?%s=%s&case=%d",
 				typ,
 				module,
-				derefMarker(resourceDereference),
 				resource.kind,
 				resource.value,
 				i,
 			)
 		}
-		if prefixDereference {
+		if addDerefPrefix {
 			input = "*" + input
 		}
 		if i%2 == 0 {
@@ -398,7 +398,7 @@ func TestHyphaParsesOneHundredURLVariations(t *testing.T) {
 			t.Fatalf("case %d: AdditionalProps[case] = %q, want %q", i, hypha.AdditionalProps["case"], fmt.Sprintf("%d", i))
 		}
 
-		wantDereference := prefixDereference || resourceDereference || module[0] == '*'
+		wantDereference := addDerefPrefix || module[0] == '*'
 		if hypha.Dereference != wantDereference {
 			t.Fatalf("case %d: Dereference = %v, want %v", i, hypha.Dereference, wantDereference)
 		}
@@ -407,7 +407,7 @@ func TestHyphaParsesOneHundredURLVariations(t *testing.T) {
 		switch {
 		case module[0] == '*':
 			wantDereferenceType = DereferenceTypeModule
-		case prefixDereference || resourceDereference:
+		case addDerefPrefix:
 			wantDereferenceType = DereferenceTypeResource
 		}
 		if hypha.DereferenceType != wantDereferenceType {

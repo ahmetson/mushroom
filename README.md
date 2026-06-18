@@ -171,7 +171,7 @@ configuration, plus whether the link is valid.
 Use `Spore` to evaluate a dereference and return the value:
 
 ```go
-service := mycelium.Spore("pkg:$?*var=services[0]")
+service := mycelium.Spore("*pkg:$?var=services[0]")
 ```
 
 This returns the element at `services[0]`.
@@ -218,7 +218,7 @@ into any of them. If the package type is not supported by the soil, it returns
 an error.
 
 ```go
-endpoint = goSourceMycelium.Spore("pkg:$?*var=serviceEndpoint")
+endpoint = goSourceMycelium.Spore("*pkg:$?var=serviceEndpoint")
 ```
 
 This returns the endpoint with its linked values still inside it:

@@ -422,6 +422,9 @@ func (hypha Hypha) String() string {
 	}
 
 	var builder strings.Builder
+	if hypha.Dereference && hypha.DereferenceType == DereferenceTypeResource {
+		builder.WriteString("*")
+	}
 	builder.WriteString("pkg:")
 	if hypha.Type != "" {
 		builder.WriteString(hypha.Type)
@@ -458,9 +461,6 @@ func (hypha Hypha) String() string {
 func (hypha Hypha) resourceString() string {
 	var builder strings.Builder
 	if hypha.ResourceKind != "" {
-		if hypha.Dereference && hypha.DereferenceType == DereferenceTypeResource {
-			builder.WriteString("*")
-		}
 		builder.WriteString(string(hypha.ResourceKind))
 		builder.WriteString("=")
 		builder.WriteString(hypha.ResourcePath.String())
@@ -566,14 +566,6 @@ func parseModule(moduleID string, hypha *Hypha) {
 func parseResource(resource string, hypha *Hypha) {
 	resourcePart, additionalProps, _ := strings.Cut(resource, "&")
 	hypha.AdditionalProps = parseAdditionalProps(additionalProps)
-
-	if strings.HasPrefix(resourcePart, "*") {
-		hypha.Dereference = true
-		if hypha.DereferenceType != DereferenceTypeModule {
-			hypha.DereferenceType = DereferenceTypeResource
-		}
-		resourcePart = strings.TrimPrefix(resourcePart, "*")
-	}
 
 	kind, value, ok := strings.Cut(resourcePart, "=")
 	if !ok {

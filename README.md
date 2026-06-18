@@ -21,16 +21,15 @@ This is a link. To turn it into a dereference, we need to add a `*`. Dereference
 
 Module derefence schema indicates, lazy load of the module but not evaluate any data yet:
 
-`pkg:type/package#`**`*module`**`?resource-kind=resource-path&key=value`.
+`pkg:type/package#***module**?resource-kind=resource-path&key=value`.
 You just add the `*` dereference operator in the beginning of module.
 
 The dereference of the resources can be in a two way:
 
-`pkg:type/package#module?`**`*resource-kind`**`=resource-path&key=value`.
-**`*pkg`**`:type/package#module?resource-kind=resource-path&key=value`.
+`pkg:type/package#module?***resource-kind**=resource-path&key=value`.
+`***pkg**:type/package#module?resource-kind=resource-path&key=value`.
 
 You just add the `*` dereference operator in the beginning of the Mushrom URL or before `resource-kind`.
-
 
 ### UTF-8 And Trimming
 
@@ -47,6 +46,7 @@ Mushroom URLs are symbolic. So any value is treated are valid, and treated as a 
 If the string after trimming starts with `pkg:` or `*pkg:` then the entire line is treated as a MushroomURL.
 
 ### Regular expressions
+
 For the urls, you don't have to provide all parts as an absolute URL.
 You can omit the parts and work with some aspects only. Except the `pkg:` indicator of Mushroom URLs.
 
@@ -71,6 +71,7 @@ To put it we need to make it dereference so, otherwise it will put a link itself
 `pkg:json#config.json?var=portID` and then evaluate the url itself.
 
 ### Types, Packages and Modules
+
 They are identical or at least shall not break the [purl](https://github.com/package-url/purl-spec).
 
 Indirectly mushroom URL gives programming languages, frameworks, and ecosystems a shared
@@ -83,12 +84,13 @@ in `go` programming language consists of modules which then consists of packages
 Or in the nodejs each project is a package, and each file is a module. That is matching to the `purl` so it leaves as it is.
 
 ### Resources
+
 Resources are key-value parameters. The resource kind can only be one of:
 
 - `var`: scalar values, constants, mutable values, and multi-value data any named data in the module.
 - `func`: code that can be evaluated, including functions, code pieces, and methods.
 - `object`: a collection of vars, state, and functions, such as a type with traits,
-  a struct with methods, or an object with properties and functions.
+a struct with methods, or an object with properties and functions.
 
 The value after `=` is a resource path. A resource path
 is built from path segments such as `path0`, `path0.path1`, or `path[arg]`.
@@ -138,11 +140,11 @@ Myceliums expose four core functions. Each function receives a Mushroom URL or
 an evaluated Mushroom value.
 
 - `mycelium.Link("your data")` returns a full path link and whether it is valid.
-  A link cannot contain a dereference.
+A link cannot contain a dereference.
 - `mycelium.Spore("dereference")` evaluates a dereference URL and returns the
-  value at that path.
+value at that path.
 - `mycelium.Fruit(sporedValue)` traverses a value, finds any links inside it,
-  and evaluates those links when needed.
+and evaluates those links when needed.
 - `mycelium.Mineralize()` returns the data in its digested format.
 - `mycelium.MushroomURL()` returns the absolute link to the mycelium.
 
@@ -239,22 +241,22 @@ endpoint = goSourceMycelium.Fruit(endpoint)
 Soil exposes these functions:
 
 - `soil.AddSubstrate(substrate)` validates the substrate Mushroom URL as a link
-  and registers it by its Hypha pattern so `Recognize` can find it later. For
-  example, the JSON substrate registers `pkg:json/$#$.json`, where `$` matches
-  any package id and `$.json` matches any module id ending in `.json`.
+and registers it by its Hypha pattern so `Recognize` can find it later. For
+example, the JSON substrate registers `pkg:json/$#$.json`, where `$` matches
+any package id and `$.json` matches any module id ending in `.json`.
 - `soil.Germinate(hypha, substrate)` is the canonical way to load an
-  unrecognised mycelium on demand. It: registers the substrate if not already
-  present; forages the raw data for `hypha` from the substrate; digests it into
-  a new `Mycelium`; and registers that mycelium as a colony so future lookups
-  find it without foraging again. `Spore` calls this automatically when it
-  encounters an `ErrUnrecognizedMycelium`.
+unrecognised mycelium on demand. It: registers the substrate if not already
+present; forages the raw data for `hypha` from the substrate; digests it into
+a new `Mycelium`; and registers that mycelium as a colony so future lookups
+find it without foraging again. `Spore` calls this automatically when it
+encounters an `ErrUnrecognizedMycelium`.
 - `soil.Recognize()` detects which mycelium the given path belongs to. If none
-  is found, it returns the substrate that can handle it. If there is no
-  mycelium and no substrate, it returns an error as the third parameter.
+is found, it returns the substrate that can handle it. If there is no
+mycelium and no substrate, it returns an error as the third parameter.
 - `soil.Colony()` returns the list of myceliums in the colony.
 - `soil.Substrates()` returns the list of engines that can create substrates.
 - `soil.Hypha()` turns a string path into an absolute Mushroom URL. It is the
-  parsing engine for the given string.
+parsing engine for the given string.
 
 ## Built in substrates: JSON
 
@@ -307,7 +309,7 @@ substrate.Sow(configURL, updated)
 `json_substrate.Mycelium` exposes three extra methods — not part of the core
 `mushroom.Mycelium` interface — for in-place mutation:
 
-**`Inoculate(path, value)`** — overwrites the value at the given resource path.
+`**Inoculate(path, value)**` — overwrites the value at the given resource path.
 
 ```go
 // Replace the first service entirely.
@@ -323,7 +325,7 @@ mycelium.Inoculate(
 )
 ```
 
-**`Graft(path, item)`** — appends an item to the array at path.
+`**Graft(path, item)**` — appends an item to the array at path.
 
 ```go
 // Add a new service to the end of the services array.
@@ -336,7 +338,7 @@ mycelium.Graft(
 )
 ```
 
-**`Prune(path)`** — removes all items matching the filter from their parent array.
+`**Prune(path)**` — removes all items matching the filter from their parent array.
 
 ```go
 // Remove a service by name.

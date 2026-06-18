@@ -242,8 +242,12 @@ Soil exposes these functions:
   and registers it by its Hypha pattern so `Recognize` can find it later. For
   example, the JSON substrate registers `pkg:json/$#$.json`, where `$` matches
   any package id and `$.json` matches any module id ending in `.json`.
-- `soil.Germinate()` calls the substrate and digests the data at the given
-  value.
+- `soil.Germinate(hypha, substrate)` is the canonical way to load an
+  unrecognised mycelium on demand. It: registers the substrate if not already
+  present; forages the raw data for `hypha` from the substrate; digests it into
+  a new `Mycelium`; and registers that mycelium as a colony so future lookups
+  find it without foraging again. `Spore` calls this automatically when it
+  encounters an `ErrUnrecognizedMycelium`.
 - `soil.Recognize()` detects which mycelium the given path belongs to. If none
   is found, it returns the substrate that can handle it. If there is no
   mycelium and no substrate, it returns an error as the third parameter.

@@ -38,20 +38,15 @@ var _ mushroom.Mycelium = (*Mycelium)(nil)
 func Root(mushroomURL string) (*Mycelium, error) {
 	substrate := &Substrate{}
 	soil := &mushroom.Soil{}
-	substrate.url = soil.Hypha("pkg:json/$#$.json")
-	if err := soil.AddSubstrate(substrate); err != nil {
-		return nil, err
-	}
-	hypha := soil.Hypha(mushroomURL)
-	data, err := substrate.Forage(hypha)
+	substrate.url, _ = soil.Hypha("pkg:json/$#$.json")
+	hypha, err := soil.Hypha(mushroomURL)
 	if err != nil {
 		return nil, err
 	}
-	got, err := substrate.Digest(hypha, data, soil)
+	got, err := soil.Germinate(hypha, substrate)
 	if err != nil {
 		return nil, err
 	}
-
 	return got.(*Mycelium), nil
 }
 
@@ -72,12 +67,13 @@ func (substrate *Substrate) Digest(url mushroom.Hypha, data any, soil *mushroom.
 	}
 
 	substrateInterface := mushroom.Substrate(substrate)
-	return &Mycelium{
+	mycelium := &Mycelium{
 		url:       url,
 		data:      decoded,
 		soil:      soil,
 		substrate: substrateInterface,
-	}, nil
+	}
+	return mycelium, nil
 }
 
 func (substrate *Substrate) MushroomURL() string {
@@ -167,7 +163,10 @@ func (substrate *Substrate) Sow(url mushroom.Hypha, data any) error {
 //	_, err := mycelium.Link("*pkg:json$#config.json?var=port")
 //	_, err := mycelium.Link("pkg:$?var=nonExistent")
 func (mycelium *Mycelium) Link(path string) (string, error) {
-	hypha := mycelium.soil.Hypha(path, mycelium.url)
+	hypha, err := mycelium.soil.Hypha(path, mycelium.url)
+	if err != nil {
+		return "", err
+	}
 	if hypha.Dereference {
 		return "", errors.New("json substrate: link cannot contain a dereference")
 	}
@@ -179,7 +178,7 @@ func (mycelium *Mycelium) Link(path string) (string, error) {
 
 	// Validate that the resolved link is recognized by the soil
 	// (either a loaded colony or a registered substrate).
-	if _, _, err := mycelium.soil.Recognize(hypha.String()); err != nil {
+	if _, _, err := mycelium.soil.Recognize(hypha); err != nil {
 		return "", err
 	}
 
@@ -187,12 +186,8 @@ func (mycelium *Mycelium) Link(path string) (string, error) {
 	// mycelium's own module and has a resource path, also verify that the
 	// resource actually exists in the data.
 	if hypha.ResourceKind != "" && mycelium.url.Satisfies(hypha) {
-		resourcePath, err := mycelium.resolveResourcePath(hypha)
-		if err != nil {
-			return "", fmt.Errorf("json substrate: resource %q not found: %w", hypha.RawResourcePath, err)
-		}
-		if _, err := lookup(mycelium.data, resourcePath); err != nil {
-			return "", fmt.Errorf("json substrate: resource %q not found: %w", hypha.RawResourcePath, err)
+		if _, err := lookup(mycelium.data, hypha.ResourcePath); err != nil {
+			return "", fmt.Errorf("json substrate: resource %q not found: %w", hypha.ResourcePath.String(), err)
 		}
 	}
 
@@ -200,7 +195,26 @@ func (mycelium *Mycelium) Link(path string) (string, error) {
 }
 
 func (mycelium *Mycelium) Spore(path string) (any, error) {
-	hypha := mycelium.soil.Hypha(path, mycelium.url)
+	// Resolve the path, loading any unrecognized mycelia referenced by
+	// dereference lambdas. Each iteration loads one mycelium and retries, so
+	// paths with multiple unloaded lambdas are handled progressively.
+	var hypha mushroom.Hypha
+	for {
+		var err error
+		hypha, err = mycelium.soil.Hypha(path, mycelium.url)
+		if err == nil {
+			break
+		}
+		var unrecognized *mushroom.ErrUnrecognizedMycelium
+		if !errors.As(err, &unrecognized) {
+			return nil, err
+		}
+		if _, germinateErr := mycelium.soil.Germinate(unrecognized.Hypha, unrecognized.Substrate); germinateErr != nil {
+			return nil, fmt.Errorf("json substrate: spore %q: %w", path, germinateErr)
+		}
+		// Colony is now registered; retry soil.Hypha.
+	}
+
 	if !hypha.URL {
 		return path, nil
 	}
@@ -214,18 +228,36 @@ func (mycelium *Mycelium) Spore(path string) (any, error) {
 		return nil, fmt.Errorf("json substrate: unsupported resource kind %q", hypha.ResourceKind)
 	}
 
-	resourcePath, err := mycelium.resolveResourcePath(hypha)
-	if err != nil {
-		return nil, err
+	colony, substrate, recognizeErr := mycelium.soil.Recognize(hypha)
+	if recognizeErr != nil {
+		return nil, fmt.Errorf("json substrate: spore %q: %w", path, recognizeErr)
 	}
 
-	return lookup(mycelium.data, resourcePath)
+	// This mycelium owns the URL — look up directly in our own data.
+	if colony == mycelium {
+		return lookup(mycelium.data, hypha.ResourcePath)
+	}
+
+	// A different colony is loaded — delegate to it.
+	if colony != nil {
+		return colony.Spore(path)
+	}
+
+	// No loaded colony — germinate on demand, then delegate.
+	m, germinateErr := mycelium.soil.Germinate(hypha, substrate)
+	if germinateErr != nil {
+		return nil, fmt.Errorf("json substrate: spore %q: %w", path, germinateErr)
+	}
+	return m.Spore(path)
 }
 
 func (mycelium *Mycelium) Fruit(value any) (any, error) {
 	switch typed := value.(type) {
 	case string:
-		hypha := mycelium.soil.Hypha(typed)
+		hypha, err := mycelium.soil.Hypha(typed)
+		if err != nil {
+			return typed, nil
+		}
 		if hypha.URL && hypha.Dereference {
 			return mycelium.Spore(typed)
 		}
@@ -570,153 +602,17 @@ func applyScalar(current any, scalar mushroom.ResourceScalar) (any, error) {
 	}
 }
 
-// resolveResourcePath resolves lambdas in hypha.RawResourcePath and returns
-// the parsed, concrete ResourcePath ready for lookup.
-func (mycelium *Mycelium) resolveResourcePath(hypha mushroom.Hypha) (mushroom.ResourcePath, error) {
-	raw := hypha.RawResourcePath
-	if raw == "" {
-		return mushroom.ResourcePath{}, fmt.Errorf("json substrate: empty resource path")
-	}
 
-	if !strings.Contains(raw, "(") {
-		return hypha.ResourcePath, nil
-	}
-
-	resolved, err := mycelium.resolvePathLambdas(raw)
-	if err != nil {
-		return mushroom.ResourcePath{}, err
-	}
-
-	parsed, ok := mushroom.ParseResourcePath(resolved, hypha.ResourceKind)
-	if !ok {
-		return mushroom.ResourcePath{}, fmt.Errorf("json substrate: invalid resolved path %q", resolved)
-	}
-	return parsed, nil
-}
-
-// resolvePathLambdas replaces every lambda expression (…) in raw with the
-// evaluated result and returns the fully concrete path string.
-// A ( is treated as a lambda start when it is at the beginning of raw or is
-// preceded by '.', '[', or ':'. Any other ( is a function-call parenthesis
-// and is copied verbatim. Recursive: if the resolved string still contains (
-// it is resolved again.
-func (mycelium *Mycelium) resolvePathLambdas(raw string) (string, error) {
-	var result strings.Builder
-	remaining := raw
-	for remaining != "" {
-		idx := strings.IndexByte(remaining, '(')
-		if idx == -1 {
-			result.WriteString(remaining)
-			break
-		}
-		prefix := remaining[:idx]
-		if !isLambdaPosition(result.String(), prefix) {
-			// Function call — copy up to and including the (.
-			result.WriteString(prefix)
-			result.WriteByte('(')
-			remaining = remaining[idx+1:]
-			continue
-		}
-		result.WriteString(prefix)
-		remaining = remaining[idx:]
-		content, rest, ok := takeBalancedParens(remaining)
-		if !ok {
-			return "", fmt.Errorf("json substrate: unbalanced parentheses in path %q", raw)
-		}
-		v, err := mycelium.evalLambda(content)
-		if err != nil {
-			return "", fmt.Errorf("json substrate: lambda %q: %w", content, err)
-		}
-		result.WriteString(fmt.Sprint(v))
-		remaining = rest
-	}
-
-	resolved := result.String()
-	if strings.Contains(resolved, "(") && resolved != raw {
-		return mycelium.resolvePathLambdas(resolved)
-	}
-	return resolved, nil
-}
-
-// isLambdaPosition reports whether a ( that follows already-written text
-// (already) and the literal prefix is a lambda start rather than a function call.
-func isLambdaPosition(already, prefix string) bool {
-	full := already + prefix
-	if full == "" {
-		return true
-	}
-	last := full[len(full)-1]
-	return last == '.' || last == '[' || last == ':'
-}
-
-// takeBalancedParens extracts the content between the opening ( and its
-// matching ) from s, which must begin with (.
-func takeBalancedParens(s string) (content, remaining string, ok bool) {
-	if len(s) == 0 || s[0] != '(' {
-		return "", s, false
-	}
-	depth := 0
-	for i, ch := range s {
-		switch ch {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return s[1:i], s[i+1:], true
-			}
-		}
-	}
-	return "", s, false
-}
-
-// evalLambda evaluates the content of a lambda expression.
-//
-// Non-URL content (no pkg: prefix): returned as a plain string symbol.
-// The lambda is purely a string literal; callers use the symbol as text in the
-// path being built, e.g. (hello-world) → "hello-world".
-//
-// URL without dereference (pkg:…): $ placeholders are filled from the current
-// mycelium context and the resolved link string is returned.
-//
-// URL with dereference (*pkg:… or pkg:*…): the resource is actually fetched
-// and the data value is returned.
-func (mycelium *Mycelium) evalLambda(content string) (any, error) {
-	hypha := mycelium.soil.Hypha(content, mycelium.url)
-
-	if !hypha.URL {
-		// Not a Mushroom URL — return the raw content as a plain symbol string.
-		return content, nil
-	}
-
-	if !hypha.Dereference {
-		// Non-dereference URL — return the absolute link string.
-		return hypha.String(), nil
-	}
-
-	// Dereference URL — look up the actual value.
-	if mycelium.url.Satisfies(hypha) {
-		return mycelium.Spore(hypha.String())
-	}
-	other, _, err := mycelium.soil.Recognize(hypha.String())
-	if err != nil || other == nil {
-		return nil, fmt.Errorf("json substrate: cannot resolve lambda %q", hypha.String())
-	}
-	return other.Spore(hypha.String())
-}
-
-// resolveSegments parses path into concrete resource-path segments,
-// resolving any lambda expressions in the process.
+// resolveSegments parses path into concrete resource-path segments.
 func (mycelium *Mycelium) resolveSegments(path string) ([]mushroom.ResourcePathSegment, error) {
-	hypha := mycelium.soil.Hypha(path, mycelium.url)
-	resourcePath, err := mycelium.resolveResourcePath(hypha)
+	hypha, err := mycelium.soil.Hypha(path, mycelium.url)
 	if err != nil {
 		return nil, err
 	}
-	if len(resourcePath.Segments) == 0 {
+	if len(hypha.ResourcePath.Segments) == 0 {
 		return nil, fmt.Errorf("json substrate: empty resource path")
 	}
-	return resourcePath.Segments, nil
+	return hypha.ResourcePath.Segments, nil
 }
 
 // navigateToParent returns the direct parent container and the last segment.

@@ -8,7 +8,10 @@ import (
 func TestHyphaDetectsMushroomURLAfterWhitespaceNormalization(t *testing.T) {
 	s := Soil{}
 
-	hypha := s.Hypha(" \t\n*\u200bpkg: json / github.com/ahmetson/hello-world # main ? *func = greeting() & lang = en ")
+	hypha, err := s.Hypha(" \t\n*\u200bpkg: json / github.com/ahmetson/hello-world # main ? *func = greeting() & lang = en ")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
 
 	if !hypha.URL {
 		t.Fatal("URL = false, want true")
@@ -43,7 +46,7 @@ func TestHyphaDetectsMushroomURLAfterWhitespaceNormalization(t *testing.T) {
 }
 
 func TestHyphaDetectsNonURL(t *testing.T) {
-	hypha := (&Soil{}).Hypha("hello world")
+	hypha, _ := (&Soil{}).Hypha("hello world")
 
 	if hypha.URL {
 		t.Fatal("URL = true, want false")
@@ -54,7 +57,7 @@ func TestHyphaDetectsNonURL(t *testing.T) {
 }
 
 func TestHyphaParsesModuleLazyLoad(t *testing.T) {
-	hypha := (&Soil{}).Hypha("pkg:golang/github.com/ahmetson/hello-world#*main?func=greeting()")
+	hypha, _ := (&Soil{}).Hypha("pkg:golang/github.com/ahmetson/hello-world#*main?func=greeting()")
 
 	if !hypha.Dereference {
 		t.Fatal("Dereference = false, want true")
@@ -68,7 +71,7 @@ func TestHyphaParsesModuleLazyLoad(t *testing.T) {
 }
 
 func TestHyphaStringReturnsPathForNonURL(t *testing.T) {
-	hypha := (&Soil{}).Hypha("hello world")
+	hypha, _ := (&Soil{}).Hypha("hello world")
 
 	if got := hypha.String(); got != "hello world" {
 		t.Fatalf("String() = %q, want %q", got, "hello world")
@@ -125,8 +128,10 @@ func TestHyphaStringUsesTypeWithAnyPackage(t *testing.T) {
 }
 
 func TestHyphaParsesResourcePathScalars(t *testing.T) {
-	// Lambda-free path: fully parsed into Segments at parse time.
-	hypha := (&Soil{}).Hypha("pkg:$?var=path0[key:$].path1[key1:value1]")
+	hypha, err := (&Soil{}).Hypha("pkg:$?var=path0[key:$].path1[key1:value1]")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
 
 	if hypha.ResourcePath.String() != "path0[key:$].path1[key1:value1]" {
 		t.Fatalf("ResourcePath = %q", hypha.ResourcePath.String())
@@ -154,20 +159,14 @@ func TestHyphaParsesResourcePathScalars(t *testing.T) {
 		t.Fatalf("second scalar = %#v, want key1:value1", second.Scalars[0])
 	}
 
-	// Lambda-containing path: Segments are NOT populated at parse time; only
-	// RawResourcePath is stored so the substrate can resolve lambdas at runtime
-	// before re-parsing the concrete path.
-	lambdaHypha := (&Soil{}).Hypha("pkg:$?var=path0[key:$].path1[key1:(*pkg:$?var=name)]")
-	if lambdaHypha.RawResourcePath == "" {
-		t.Fatal("RawResourcePath is empty for lambda-containing path")
-	}
-	if len(lambdaHypha.ResourcePath.Segments) != 0 {
-		t.Fatalf("Segments = %d, want 0 for deferred lambda path", len(lambdaHypha.ResourcePath.Segments))
+	// A dereference lambda with no colony in the soil must return an error.
+	if _, err := (&Soil{}).Hypha("pkg:$?var=path0[key:$].path1[key1:(*pkg:$?var=name)]"); err == nil {
+		t.Fatal("Hypha with unresolvable dereference lambda: want error, got nil")
 	}
 }
 
 func TestHyphaParsesCallResourcePath(t *testing.T) {
-	hypha := (&Soil{}).Hypha("pkg:$?func=hello.world.first()")
+	hypha, _ := (&Soil{}).Hypha("pkg:$?func=hello.world.first()")
 
 	last := hypha.ResourcePath.Segments[len(hypha.ResourcePath.Segments)-1]
 	if last.Call == nil {
@@ -179,7 +178,7 @@ func TestHyphaParsesCallResourcePath(t *testing.T) {
 }
 
 func TestHyphaRejectsFuncWithoutCall(t *testing.T) {
-	hypha := (&Soil{}).Hypha("pkg:$?func=fooBar")
+	hypha, _ := (&Soil{}).Hypha("pkg:$?func=fooBar")
 
 	if hypha.ResourceKind != "" {
 		t.Fatalf("ResourceKind = %q, want empty for func without call", hypha.ResourceKind)
@@ -187,7 +186,7 @@ func TestHyphaRejectsFuncWithoutCall(t *testing.T) {
 }
 
 func TestHyphaAcceptsFuncCall(t *testing.T) {
-	hypha := (&Soil{}).Hypha("pkg:$?func=fooBar()")
+	hypha, _ := (&Soil{}).Hypha("pkg:$?func=fooBar()")
 
 	if hypha.ResourceKind != ResourceKindFunc {
 		t.Fatalf("ResourceKind = %q, want %q", hypha.ResourceKind, ResourceKindFunc)
@@ -201,7 +200,7 @@ func TestHyphaAcceptsFuncCall(t *testing.T) {
 }
 
 func TestHyphaParsesFuncCallArguments(t *testing.T) {
-	hypha := (&Soil{}).Hypha("pkg:$?func=fooBar(arg:arg-value,name:$)")
+	hypha, _ := (&Soil{}).Hypha("pkg:$?func=fooBar(arg:arg-value,name:$)")
 
 	call := hypha.ResourcePath.Segments[0].Call
 	if call == nil {
@@ -222,7 +221,7 @@ func TestHyphaParsesFuncCallArguments(t *testing.T) {
 }
 
 func TestHyphaRejectsFuncResourceWithoutFinalCall(t *testing.T) {
-	hypha := (&Soil{}).Hypha("pkg:$?func=hello.world")
+	hypha, _ := (&Soil{}).Hypha("pkg:$?func=hello.world")
 
 	if hypha.ResourceKind != "" {
 		t.Fatalf("ResourceKind = %q, want empty for invalid func path", hypha.ResourceKind)
@@ -231,9 +230,9 @@ func TestHyphaRejectsFuncResourceWithoutFinalCall(t *testing.T) {
 
 func TestHyphaFillsFromDefault(t *testing.T) {
 	soil := &Soil{}
-	def := soil.Hypha("pkg:json$#config.json")
+	def, _ := soil.Hypha("pkg:json$#config.json")
 
-	hypha := soil.Hypha("pkg:$?var=services", def)
+	hypha, _ := soil.Hypha("pkg:$?var=services", def)
 
 	if hypha.Type != "json" {
 		t.Fatalf("Type = %q, want %q", hypha.Type, "json")
@@ -252,9 +251,9 @@ func TestHyphaFillsFromDefault(t *testing.T) {
 
 func TestHyphaDefaultDoesNotOverrideConcreteParts(t *testing.T) {
 	soil := &Soil{}
-	def := soil.Hypha("pkg:json$#config.json")
+	def, _ := soil.Hypha("pkg:json$#config.json")
 
-	hypha := soil.Hypha("pkg:golang/github.com/example/app#main.go?var=port", def)
+	hypha, _ := soil.Hypha("pkg:golang/github.com/example/app#main.go?var=port", def)
 
 	if hypha.Type != "golang" {
 		t.Fatalf("Type = %q, want %q", hypha.Type, "golang")
@@ -270,9 +269,9 @@ func TestHyphaDefaultDoesNotOverrideConcreteParts(t *testing.T) {
 func TestHyphaDefaultWithFuncCallIsRejected(t *testing.T) {
 	soil := &Soil{}
 	// A default with a function call in its resource path should not be applied.
-	def := soil.Hypha("pkg:json$#config.json?func=validate()")
+	def, _ := soil.Hypha("pkg:json$#config.json?func=validate()")
 
-	hypha := soil.Hypha("pkg:$?var=port", def)
+	hypha, _ := soil.Hypha("pkg:$?var=port", def)
 
 	// Type and ModuleID should remain empty/wildcard because the default was invalid.
 	if hypha.Type != "" {
@@ -282,14 +281,14 @@ func TestHyphaDefaultWithFuncCallIsRejected(t *testing.T) {
 
 func TestHyphaSatisfiesPattern(t *testing.T) {
 	soil := &Soil{}
-	pattern := soil.Hypha("pkg:json/$#$.json")
-	value := soil.Hypha("pkg:json/github.com/example/config#app.json?var=port")
+	pattern, _ := soil.Hypha("pkg:json/$#$.json")
+	value, _ := soil.Hypha("pkg:json/github.com/example/config#app.json?var=port")
 
 	if !pattern.Satisfies(value) {
 		t.Fatalf("%q should satisfy %q", value.String(), pattern.String())
 	}
 
-	nonJSON := soil.Hypha("pkg:json/github.com/example/config#app.txt?var=port")
+	nonJSON, _ := soil.Hypha("pkg:json/github.com/example/config#app.txt?var=port")
 	if pattern.Satisfies(nonJSON) {
 		t.Fatalf("%q should not satisfy %q", nonJSON.String(), pattern.String())
 	}
@@ -302,7 +301,8 @@ func TestSoilRecognizesSubstratePattern(t *testing.T) {
 		t.Fatalf("AddSubstrate returned error: %v", err)
 	}
 
-	_, got, err := soil.Recognize("pkg:json/github.com/example/config#app.json?var=port")
+	rh, _ := soil.Hypha("pkg:json/github.com/example/config#app.json?var=port")
+	_, got, err := soil.Recognize(rh)
 	if err != nil {
 		t.Fatalf("Recognize returned error: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestHyphaParsesOneHundredURLVariations(t *testing.T) {
 			input = addWhitespaceNoise(input)
 		}
 
-		hypha := s.Hypha(input)
+		hypha, _ := s.Hypha(input)
 		if !hypha.URL {
 			t.Fatalf("case %d: URL = false, want true for %q", i, input)
 		}

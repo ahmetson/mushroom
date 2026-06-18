@@ -14,17 +14,26 @@ func TestSubstrateImplementsMushroomSubstrate(t *testing.T) {
 }
 
 // digest is a test helper that digests inline data without touching the file
-// system, mirroring the old standalone Digest function.
+// system, mirroring the old standalone Root function but accepting raw data.
 func digest(url string, data string) (*Mycelium, error) {
 	soil := &mushroom.Soil{}
-	substrate := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
-	if err := soil.AddSubstrate(substrate); err != nil {
-		return nil, err
-	}
-	got, err := substrate.Digest(soil.Hypha(url), data, soil)
+	pattern, err := soil.Hypha("pkg:json/$#$.json")
 	if err != nil {
 		return nil, err
 	}
+	substrate := &Substrate{url: pattern}
+	if err := soil.AddSubstrate(substrate); err != nil {
+		return nil, err
+	}
+	hypha, err := soil.Hypha(url)
+	if err != nil {
+		return nil, err
+	}
+	got, err := substrate.Digest(hypha, data, soil)
+	if err != nil {
+		return nil, err
+	}
+	soil.AddColony(got)
 	return got.(*Mycelium), nil
 }
 
@@ -57,18 +66,22 @@ func TestDigestAcceptsString(t *testing.T) {
 
 func TestSubstrateDigestRejectsBytes(t *testing.T) {
 	soil := &mushroom.Soil{}
-	substrate := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
+	pattern, _ := soil.Hypha("pkg:json/$#$.json")
+	substrate := &Substrate{url: pattern}
 
-	if _, err := substrate.Digest(soil.Hypha("pkg:json$#my-app-config.json"), []byte(`{"port":8080}`), soil); err == nil {
+	reqHypha, _ := soil.Hypha("pkg:json$#my-app-config.json")
+	if _, err := substrate.Digest(reqHypha, []byte(`{"port":8080}`), soil); err == nil {
 		t.Fatal("Digest returned nil error, want unsupported bytes error")
 	}
 }
 
 func TestDigestUsesProvidedSoil(t *testing.T) {
 	soil := &mushroom.Soil{}
-	substrate := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
+	pattern, _ := soil.Hypha("pkg:json/$#$.json")
+	substrate := &Substrate{url: pattern}
 
-	got, err := substrate.Digest(soil.Hypha("pkg:json$#my-app-config.json"), `{"port":8080}`, soil)
+	reqHypha, _ := soil.Hypha("pkg:json$#my-app-config.json")
+	got, err := substrate.Digest(reqHypha, `{"port":8080}`, soil)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -103,12 +116,16 @@ func TestJSONSubstratePatternRecognizesJSONModules(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	_, substrate, err := mycelium.Soil().Recognize("pkg:json/json_dir#my-app-config.json")
+	// After Digest the mycelium is registered as a colony in the soil, so
+	// Recognize may return either a colony or a substrate — both indicate the
+	// JSON pattern is known to the soil.
+	rh, _ := mycelium.Soil().Hypha("pkg:json/json_dir#my-app-config.json")
+	colony, substrate, err := mycelium.Soil().Recognize(rh)
 	if err != nil {
 		t.Fatalf("Recognize returned error: %v", err)
 	}
-	if substrate == nil {
-		t.Fatal("Recognize returned nil substrate")
+	if colony == nil && substrate == nil {
+		t.Fatal("Recognize found neither colony nor substrate")
 	}
 }
 
@@ -118,7 +135,8 @@ func TestJSONSubstratePatternRejectsOtherJSONLikeTypes(t *testing.T) {
 		t.Fatalf("Digest returned error: %v", err)
 	}
 
-	if _, _, err := mycelium.Soil().Recognize("pkg:json-ad/file_dir#config.json"); err == nil {
+	rh, _ := mycelium.Soil().Hypha("pkg:json-ad/file_dir#config.json")
+	if _, _, err := mycelium.Soil().Recognize(rh); err == nil {
 		t.Fatal("Recognize returned nil error, want json-ad to fail")
 	}
 }
@@ -988,7 +1006,8 @@ func TestSubstrateForageAndSow(t *testing.T) {
 	dir := t.TempDir()
 
 	soil := &mushroom.Soil{}
-	s := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
+	pattern, _ := soil.Hypha("pkg:json/$#$.json")
+	s := &Substrate{url: pattern}
 
 	// Build a Hypha pointing at dir/data.json.  We construct it directly so
 	// that we can supply the absolute temp-dir path as PackageID.
@@ -1055,5 +1074,210 @@ func TestSubstrateForageAndSow(t *testing.T) {
 	if err := s.Sow(badURL, "{}"); err == nil {
 		t.Fatal("Sow(badURL): expected error, got nil")
 	}
+}
+
+// TestHyphaModuleLambda validates that:
+//   - A plain URL is returned as a Hypha without any colony evaluation.
+//   - A lambda in the module position is evaluated, but the root Hypha is not.
+//   - The same holds when the root Hypha is itself a dereference URL.
+func TestHyphaModuleLambda(t *testing.T) {
+	colony, err := digest("pkg:json$#config.json", `{"config-name":"config.json"}`)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	soil := colony.Soil()
+
+	// Scenario 1: pkg:json#config.json?var=name
+	//
+	// No lambdas present. Hypha() returns the parsed URL without touching any
+	// colony (Link / Spore are never called).
+	t.Run("plain URL returned without link evaluation", func(t *testing.T) {
+		h, err := soil.Hypha("pkg:json#config.json?var=name")
+		if err != nil {
+			t.Fatalf("Hypha error: %v", err)
+		}
+		if h.Type != "json" {
+			t.Fatalf("Type = %q, want %q", h.Type, "json")
+		}
+		if h.ModuleID != "config.json" {
+			t.Fatalf("ModuleID = %q, want %q", h.ModuleID, "config.json")
+		}
+		if h.ResourceKind != mushroom.ResourceKindVar {
+			t.Fatalf("ResourceKind = %q, want %q", h.ResourceKind, mushroom.ResourceKindVar)
+		}
+		if h.ResourcePath.Raw != "name" {
+			t.Fatalf("ResourcePath = %q, want %q", h.ResourcePath.Raw, "name")
+		}
+		if h.Dereference {
+			t.Fatal("Dereference = true, want false")
+		}
+	})
+
+	// Scenario 2: pkg:json#(*pkg:$?var=config-name)  (defaults = colony.url)
+	//
+	// The `(` follows `#`, which is not an identifier character, so it is a
+	// lambda.  The inner dereference *pkg:$?var=config-name is filled from
+	// defaults → *pkg:json$#config.json?var=config-name, which Spore resolves
+	// to "config.json".
+	//
+	// Resolved path: "pkg:json#config.json"
+	// Root Hypha is NOT a dereference — it is simply returned, not executed.
+	t.Run("module lambda evaluates, root hypha is not executed", func(t *testing.T) {
+		h, err := soil.Hypha("pkg:json#(*pkg:$?var=config-name)", colony.url)
+		if err != nil {
+			t.Fatalf("Hypha error: %v", err)
+		}
+		if h.Type != "json" {
+			t.Fatalf("Type = %q, want %q", h.Type, "json")
+		}
+		if h.ModuleID != "config.json" {
+			t.Fatalf("ModuleID = %q, want %q", h.ModuleID, "config.json")
+		}
+		if h.Dereference {
+			t.Fatal("root Hypha must not be a dereference")
+		}
+	})
+
+	// Scenario 3: *pkg:json#(*pkg:$?var=config-name)  (defaults = colony.url)
+	//
+	// Same module lambda as scenario 2, but the root URL is prefixed with `*`.
+	// After the lambda is evaluated the resolved path is "*pkg:json#config.json".
+	// Hypha() returns a dereference Hypha — it is not Spored or Linked itself.
+	t.Run("dereference root with module lambda is parsed but not executed", func(t *testing.T) {
+		h, err := soil.Hypha("*pkg:json#(*pkg:$?var=config-name)", colony.url)
+		if err != nil {
+			t.Fatalf("Hypha error: %v", err)
+		}
+		if h.Type != "json" {
+			t.Fatalf("Type = %q, want %q", h.Type, "json")
+		}
+		if h.ModuleID != "config.json" {
+			t.Fatalf("ModuleID = %q, want %q", h.ModuleID, "config.json")
+		}
+		if !h.Dereference {
+			t.Fatal("root Hypha must be a dereference URL")
+		}
+	})
+}
+
+// TestHyphaLambdaComposition validates four lambda-embedding scenarios that
+// exercise how Soil.Hypha resolves lambdas during URL construction.
+//
+// A "fake colony" mycelium is created from a JSON object that stores two
+// string variables:
+//
+//	package-name        = "$"           (a wildcard package identifier)
+//	package-and-module  = "$#config.json" (wildcard package + concrete module)
+func TestHyphaLambdaComposition(t *testing.T) {
+	colony, err := digest("pkg:json$#config.json",
+		`{"package-name":"$","package-and-module":"$#config.json"}`)
+	if err != nil {
+		t.Fatalf("setup colony: %v", err)
+	}
+	soil := colony.Soil()
+
+	// --- Scenario 1 --------------------------------------------------------
+	// Path: (*)(pkg:(packageormodule))
+	//
+	// (*)                       → plain symbol "*"
+	// (pkg:(packageormodule))   → inner (packageormodule) is a plain symbol
+	//                             → "pkg:packageormodule" (non-dereference link,
+	//                               no colony for type "packageormodule")
+	//
+	// Resolved path: "*pkg:packageormodule"
+	// Parsed Hypha:  Dereference=true, Type="packageormodule"
+	// Usage fails:   no colony recognises type "packageormodule".
+	t.Run("symbol-star plus link produces dereference with wrong type", func(t *testing.T) {
+		h, err := soil.Hypha("(*)(pkg:(packageormodule))")
+		if err != nil {
+			t.Fatalf("Hypha returned error: %v", err)
+		}
+		if !h.Dereference {
+			t.Fatal("Dereference = false, want true")
+		}
+		if h.Type != "packageormodule" {
+			t.Fatalf("Type = %q, want %q", h.Type, "packageormodule")
+		}
+		// Recognize fails: no substrate or colony has type "packageormodule".
+		if _, _, err := soil.Recognize(h); err == nil {
+			t.Fatalf("Recognize(%q): want error, got nil", h.String())
+		}
+	})
+
+	// --- Scenario 2 --------------------------------------------------------
+	// Path: pkg:(pkg:json#config.json?var=package-name)
+	//
+	// The lambda (pkg:json#config.json?var=package-name) is NON-dereference.
+	// evalLambda calls colony.Link → returns the absolute link string
+	// "pkg:json$#config.json?var=package-name".
+	//
+	// That link string is embedded verbatim after "pkg:", producing:
+	//   "pkg:pkg:json$#config.json?var=package-name"
+	//
+	// The parser sees type "pkg:json" (because the embedded "pkg:" prefix is
+	// treated as part of the type token) — semantically invalid.
+	// Recognize fails: no substrate has type "pkg:json".
+	t.Run("non-dereference lambda embeds link literally and corrupts type", func(t *testing.T) {
+		h, err := soil.Hypha("pkg:(pkg:json#config.json?var=package-name)")
+		if err != nil {
+			t.Fatalf("Hypha returned error: %v", err)
+		}
+		if h.Type != "pkg:json" {
+			t.Fatalf("Type = %q, want %q (link embedded verbatim into type position)",
+				h.Type, "pkg:json")
+		}
+		// Recognize fails: type "pkg:json" is not registered.
+		if _, _, err := soil.Recognize(h); err == nil {
+			t.Fatalf("Recognize(%q): want error, got nil", h.String())
+		}
+	})
+
+	// --- Scenario 3 --------------------------------------------------------
+	// Path: pkg:json/(*pkg:json#config.json?var=package-name)
+	//
+	// The lambda (*pkg:json#config.json?var=package-name) IS dereference.
+	// evalLambda calls colony.Spore → value of "package-name" = "$".
+	//
+	// Resolved path: "pkg:json/$"
+	// Parsed Hypha:  Type="json", PackageID="$", no module — valid, usable.
+	t.Run("dereference lambda fetches value and builds valid URL", func(t *testing.T) {
+		h, err := soil.Hypha("pkg:json/(*pkg:json#config.json?var=package-name)")
+		if err != nil {
+			t.Fatalf("Hypha returned error: %v", err)
+		}
+		if h.Type != "json" {
+			t.Fatalf("Type = %q, want %q", h.Type, "json")
+		}
+		if h.PackageID != "$" {
+			t.Fatalf("PackageID = %q, want %q", h.PackageID, "$")
+		}
+	})
+
+	// --- Scenario 4 --------------------------------------------------------
+	// Path: pkg:json/(*pkg:$?var=package-and-module)  (defaults = colony.url)
+	//
+	// The lambda has a wildcard type ($). With colony.url as defaults:
+	//   *pkg:$?var=package-and-module → *pkg:json$#config.json?var=package-and-module
+	// colony.Spore returns the value "$#config.json".
+	//
+	// Resolved path: "pkg:json/$#config.json"
+	// Parsed Hypha:  Type="json", PackageID="$", ModuleID="config.json" — fully valid.
+	// This shows how a single lambda can reconstruct a complete module URL
+	// by dereferencing a stored "package-and-module" variable.
+	t.Run("dereference wildcard lambda with defaults reconstructs full module URL", func(t *testing.T) {
+		h, err := soil.Hypha("pkg:json/(*pkg:$?var=package-and-module)", colony.url)
+		if err != nil {
+			t.Fatalf("Hypha returned error: %v", err)
+		}
+		if h.Type != "json" {
+			t.Fatalf("Type = %q, want %q", h.Type, "json")
+		}
+		if h.PackageID != "$" {
+			t.Fatalf("PackageID = %q, want %q", h.PackageID, "$")
+		}
+		if h.ModuleID != "config.json" {
+			t.Fatalf("ModuleID = %q, want %q", h.ModuleID, "config.json")
+		}
+	})
 }
 

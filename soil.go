@@ -2,6 +2,7 @@ package mushroom
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,13 +19,36 @@ var (
 	ErrInvalidSubstrate  = errors.New("mushroom: substrate MushroomURL must be a link")
 )
 
+// ErrUnrecognizedMycelium is returned by Hypha (via evalLambda) when a
+// dereference lambda has a matching substrate but no loaded colony. Substrate
+// is the substrate that can materialise the mycelium; callers (e.g. Spore)
+// should Forage+Digest it and retry.
+type ErrUnrecognizedMycelium struct {
+	Hypha     Hypha
+	Substrate Substrate
+}
+
+func (e *ErrUnrecognizedMycelium) Error() string {
+	return fmt.Sprintf("mushroom: mycelium %q is not loaded", e.Hypha.String())
+}
+
+// ErrUnrecognizedSubstrate is returned by Hypha (via evalLambda) when a
+// dereference lambda's URL is not known to any colony or substrate in the soil.
+type ErrUnrecognizedSubstrate struct {
+	Hypha Hypha
+}
+
+func (e *ErrUnrecognizedSubstrate) Error() string {
+	return fmt.Sprintf("mushroom: no substrate found for %q", e.Hypha.String())
+}
+
 func (soil *Soil) AddSubstrate(substrate Substrate) error {
 	if substrate == nil {
 		return ErrInvalidSubstrate
 	}
 
-	hypha := soil.Hypha(substrate.MushroomURL())
-	if !hypha.URL || hypha.Dereference {
+	hypha, err := soil.Hypha(substrate.MushroomURL())
+	if err != nil || !hypha.URL || hypha.Dereference {
 		return ErrInvalidSubstrate
 	}
 
@@ -40,6 +64,37 @@ func (soil *Soil) AddColony(mycelium Mycelium) {
 	soil.colonies = append(soil.colonies, mycelium)
 }
 
+// Germinate forages raw data for hypha from substrate, digests it into a new
+// Mycelium, and registers both the mycelium (as a colony) and the substrate
+// (if not already present) into the soil. It is the canonical way to load an
+// unrecognised mycelium on demand.
+func (soil *Soil) Germinate(hypha Hypha, substrate Substrate) (Mycelium, error) {
+	alreadyRegistered := false
+	for _, s := range soil.substrates {
+		if s.MushroomURL() == substrate.MushroomURL() {
+			alreadyRegistered = true
+			break
+		}
+	}
+	if !alreadyRegistered {
+		if err := soil.AddSubstrate(substrate); err != nil {
+			return nil, err
+		}
+	}
+
+	moduleHypha := hypha.ModuleURL()
+	data, err := substrate.Forage(moduleHypha)
+	if err != nil {
+		return nil, fmt.Errorf("mushroom: germinate %q: forage: %w", hypha.String(), err)
+	}
+	m, err := substrate.Digest(moduleHypha, data, soil)
+	if err != nil {
+		return nil, fmt.Errorf("mushroom: germinate %q: digest: %w", hypha.String(), err)
+	}
+	soil.AddColony(m)
+	return m, nil
+}
+
 func (soil *Soil) Substrates() []Substrate {
 	return append([]Substrate(nil), soil.substrates...)
 }
@@ -48,16 +103,21 @@ func (soil *Soil) Colony() []Mycelium {
 	return append([]Mycelium(nil), soil.colonies...)
 }
 
-func (soil *Soil) Recognize(path string) (Mycelium, Substrate, error) {
-	hypha := soil.Hypha(path)
+// Recognize returns the colony or substrate that matches hypha.
+// The return values behave like a radio group: exactly one of Mycelium or
+// Substrate will be non-nil on success; the other is always nil. On failure
+// both are nil and error is non-nil.
+func (soil *Soil) Recognize(hypha Hypha) (Mycelium, Substrate, error) {
 	for _, mycelium := range soil.colonies {
-		if soil.Hypha(mycelium.MushroomURL()).Satisfies(hypha) {
+		mh, err := soil.Hypha(mycelium.MushroomURL())
+		if err == nil && mh.Satisfies(hypha) {
 			return mycelium, nil, nil
 		}
 	}
 
 	for _, substrate := range soil.substrates {
-		if soil.Hypha(substrate.MushroomURL()).Satisfies(hypha) {
+		sh, err := soil.Hypha(substrate.MushroomURL())
+		if err == nil && sh.Satisfies(hypha) {
 			return nil, substrate, nil
 		}
 	}
@@ -131,22 +191,73 @@ type Hypha struct {
 	ModuleID        string // Module name or file name
 	ResourceKind    ResourceKind
 	ResourcePath    ResourcePath // Resource path such as path0, path0.path1, or path[scalar]
-	// RawResourcePath is the unresolved resource path string exactly as it
-	// appears after the kind= separator, before any lambda substitution. It is
-	// non-empty whenever ResourceKind is set. Substrates use this to run lambda
-	// resolution before re-parsing the concrete path for lookup.
-	RawResourcePath string
 	AdditionalProps map[string]string
 	URL             bool // if path has `pkg:` prefixed its a mushroom url. Otherwise its just a symbol
 }
 
-// Hypha parses path into a structured Hypha.
+// AsLink returns a copy of the hypha with the dereference flag cleared.
+// If the hypha is not a URL it is returned unchanged.
+func (h Hypha) AsLink() Hypha {
+	if !h.URL {
+		return h
+	}
+	h.Dereference = false
+	h.DereferenceType = ""
+	return h
+}
+
+// AsDereference returns a copy of the hypha with the dereference flag set.
+// If no DereferenceType is supplied it defaults to DereferenceTypeResource.
+// If the hypha is not a URL it is returned unchanged.
+func (h Hypha) AsDereference(dt ...DereferenceType) Hypha {
+	if !h.URL {
+		return h
+	}
+	h.Dereference = true
+	if len(dt) > 0 {
+		h.DereferenceType = dt[0]
+	} else {
+		h.DereferenceType = DereferenceTypeResource
+	}
+	return h
+}
+
+// ModuleURL returns a copy of the hypha stripped to its module-level identity:
+// URL, Type, PackageID, ModuleID, and AdditionalProps only. Dereference,
+// ResourceKind, and ResourcePath are cleared. If the hypha is not a URL it is
+// returned unchanged.
+func (h Hypha) ModuleURL() Hypha {
+	if !h.URL {
+		return h
+	}
+	return Hypha{
+		URL:             true,
+		Type:            h.Type,
+		PackageID:       h.PackageID,
+		ModuleID:        h.ModuleID,
+		AdditionalProps: h.AdditionalProps,
+	}
+}
+
+// Hypha parses path into a structured Hypha, recursively evaluating any lambda
+// expressions (…) before structural parsing. Lambda execution is driven by the
+// soil's registered colonies.
+//
 // An optional defaults Hypha can be provided; any empty or wildcard ($) field
 // in the parsed result is filled from defaults, provided defaults contains no
-// lambdas and no function-call segments in its resource path.
-func (*Soil) Hypha(path string, defaults ...Hypha) Hypha {
+// function-call segments in its resource path.
+//
+// Returns an error when a lambda cannot be resolved (e.g. a dereference lambda
+// with no matching colony).
+func (soil *Soil) Hypha(path string, defaults ...Hypha) (Hypha, error) {
 	hypha := Hypha{Path: path}
-	normalized := stripIgnoredRunes(path)
+
+	resolved, err := soil.resolvePathLambdas(path, defaults...)
+	if err != nil {
+		return hypha, err
+	}
+
+	normalized := stripIgnoredRunes(resolved)
 
 	switch {
 	case strings.HasPrefix(normalized, "*pkg:"):
@@ -158,7 +269,7 @@ func (*Soil) Hypha(path string, defaults ...Hypha) Hypha {
 		hypha.URL = true
 		normalized = strings.TrimPrefix(normalized, "pkg:")
 	default:
-		return hypha
+		return hypha, nil
 	}
 
 	packageAndSections := parseTypeAndPackage(normalized, &hypha)
@@ -168,7 +279,101 @@ func (*Soil) Hypha(path string, defaults ...Hypha) Hypha {
 		fillHyphaFromDefault(&hypha, defaults[0])
 	}
 
-	return hypha
+	return hypha, nil
+}
+
+// resolvePathLambdas replaces every lambda expression (…) in raw with its
+// evaluated string result and returns the fully concrete path.
+// A ( is a lambda start when NOT immediately preceded by an identifier character
+// (letter, digit, _ or -); otherwise it is a function-call parenthesis copied
+// verbatim. Resolution is recursive: the result is re-processed until no more
+// lambdas remain.
+func (soil *Soil) resolvePathLambdas(raw string, defaults ...Hypha) (string, error) {
+	var result strings.Builder
+	remaining := raw
+	for remaining != "" {
+		idx := strings.IndexByte(remaining, '(')
+		if idx == -1 {
+			result.WriteString(remaining)
+			break
+		}
+		prefix := remaining[:idx]
+		if !isLambdaPosition(result.String(), prefix) {
+			// Function-call parenthesis — copy through verbatim.
+			result.WriteString(prefix)
+			result.WriteByte('(')
+			remaining = remaining[idx+1:]
+			continue
+		}
+		result.WriteString(prefix)
+		remaining = remaining[idx:]
+		content, rest, ok := takeBalanced(remaining, '(', ')')
+		if !ok {
+			return "", fmt.Errorf("mushroom: unbalanced parentheses in path %q", raw)
+		}
+		v, err := soil.evalLambda(content, defaults...)
+		if err != nil {
+			return "", fmt.Errorf("mushroom: lambda %q: %w", content, err)
+		}
+		result.WriteString(v)
+		remaining = rest
+	}
+
+	resolved := result.String()
+	if pathContainsLambda(resolved) && resolved != raw {
+		return soil.resolvePathLambdas(resolved, defaults...)
+	}
+	return resolved, nil
+}
+
+// evalLambda evaluates the content of one lambda expression and returns its
+// string representation.
+//
+//   - Symbol (no pkg: prefix): returned verbatim as a plain string.
+//   - Non-dereference URL: if a matching colony is found its Link is called;
+//     otherwise the resolved link string is returned as-is.
+//   - Dereference URL: a matching colony must exist; its Spore result is
+//     formatted with fmt.Sprint and returned. Returns an error when no colony
+//     is found.
+func (soil *Soil) evalLambda(content string, defaults ...Hypha) (string, error) {
+	h, err := soil.Hypha(content, defaults...)
+	if err != nil {
+		return "", err
+	}
+
+	if !h.URL {
+		return content, nil
+	}
+
+	if !h.Dereference {
+		return h.String(), nil
+	}
+
+	colony, substrate, err := soil.Recognize(h)
+	if err != nil {
+		return "", &ErrUnrecognizedSubstrate{Hypha: h}
+	}
+	if colony == nil {
+		return "", &ErrUnrecognizedMycelium{Hypha: h, Substrate: substrate}
+	}
+
+	val, err := colony.Spore(h.String())
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprint(val), nil
+}
+
+// isLambdaPosition reports whether the ( that follows the already-written text
+// (already) and the literal prefix before the ( is a lambda start rather than
+// a function-call parenthesis.
+// A ( is a lambda when not immediately preceded by an identifier character.
+func isLambdaPosition(already, prefix string) bool {
+	full := already + prefix
+	if full == "" {
+		return true
+	}
+	return !isIdentChar(full[len(full)-1])
 }
 
 // fillHyphaFromDefault copies concrete fields from def into hypha for any field
@@ -378,23 +583,11 @@ func parseResource(resource string, hypha *Hypha) {
 	switch kind {
 	case string(ResourceKindVar), string(ResourceKindFunc), string(ResourceKindObj):
 		resourceKind := ResourceKind(kind)
-		// Paths that contain lambda expressions (…) are deferred: we store the
-		// raw string and skip immediate structural validation because lambdas are
-		// resolved at runtime by the substrate before the path is parsed.
-		// A ( is a lambda start only when it is NOT preceded by an identifier
-		// character (letter, digit, _ or -). Preceded by one of those it is a
-		// function-call parenthesis and does not indicate a lambda.
-		if pathContainsLambda(value) {
-			hypha.ResourceKind = resourceKind
-			hypha.RawResourcePath = value
-			return
-		}
 		resourcePath, ok := parseResourcePath(value, resourceKind)
 		if !ok {
 			return
 		}
 		hypha.ResourceKind = resourceKind
-		hypha.RawResourcePath = value
 		hypha.ResourcePath = resourcePath
 	}
 }
@@ -705,6 +898,11 @@ func (pattern Hypha) Satisfies(hypha Hypha) bool {
 	}
 	if !matchHyphaPart(pattern.ResourcePath.String(), hypha.ResourcePath.String()) {
 		return false
+	}
+	for key, patVal := range pattern.AdditionalProps {
+		if !matchHyphaPart(patVal, hypha.AdditionalProps[key]) {
+			return false
+		}
 	}
 
 	return true

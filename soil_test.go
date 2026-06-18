@@ -466,3 +466,94 @@ func (substrate fakeSubstrate) Forage(Hypha) (any, error) {
 func (substrate fakeSubstrate) Sow(Hypha, any) error {
 	return nil
 }
+
+func TestParentResourceURLSymbolic(t *testing.T) {
+	parent, ok := ParentResourceURL("main")
+	if ok {
+		t.Fatal("ok = true, want false for symbolic url")
+	}
+	if parent != "main" {
+		t.Fatalf("parent = %q, want %q", parent, "main")
+	}
+}
+
+func TestParentResourceURLNoResourcePath(t *testing.T) {
+	const url = "pkg:golang/github.com/ahmetson/hello-world#main"
+	parent, ok := ParentResourceURL(url)
+	if ok {
+		t.Fatal("ok = true, want false")
+	}
+	if parent != url {
+		t.Fatalf("parent = %q, want %q", parent, url)
+	}
+}
+
+func TestParentResourceURLSinglePlainSegment(t *testing.T) {
+	const url = "pkg:$?var=services"
+	parent, ok := ParentResourceURL(url)
+	if ok {
+		t.Fatal("ok = true, want false")
+	}
+	const want = "pkg:$#$?var=services"
+	if parent != want {
+		t.Fatalf("parent = %q, want %q", parent, want)
+	}
+}
+
+func TestParentResourceURLSingleIndexedSegment(t *testing.T) {
+	const (
+		url  = "pkg:$?var=services[name:proxy]"
+		want = "pkg:$?var=services"
+	)
+	parent, ok := ParentResourceURL(url)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if parent != want {
+		t.Fatalf("parent = %q, want %q", parent, want)
+	}
+}
+
+func TestParentResourceURLMultiSegment(t *testing.T) {
+	const (
+		url  = "*pkg:$?var=services[name:proxy].handlers[category:main].outbounds"
+		want = "*pkg:$?var=services[name:proxy].handlers[category:main]"
+	)
+	parent, ok := ParentResourceURL(url)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if parent != want {
+		t.Fatalf("parent = %q, want %q", parent, want)
+	}
+}
+
+func TestParentResourceURLTrimsHandlerSegment(t *testing.T) {
+	const (
+		url  = "*pkg:$?var=services[name:proxy].handlers[category:main]"
+		want = "*pkg:$?var=services[name:proxy].handlers"
+	)
+	parent, ok := ParentResourceURL(url)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if parent != want {
+		t.Fatalf("parent = %q, want %q", parent, want)
+	}
+}
+
+func TestHyphaParentResourceURL(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services[name:proxy].handlers[category:main].outbounds")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+
+	parent, ok := hypha.ParentResourceURL()
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	const want = "*pkg:$?var=services[name:proxy].handlers[category:main]"
+	if parent != want {
+		t.Fatalf("parent = %q, want %q", parent, want)
+	}
+}

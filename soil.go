@@ -149,6 +149,119 @@ func (path ResourcePath) String() string {
 	return path.Raw
 }
 
+// ParentResourceURL returns the parent dereference Mushroom URL of h's resource
+// path, with the last path step removed.
+//
+// Symbolic paths (no pkg: prefix) are returned unchanged with ok false.
+// URLs without a resource path, or with a single plain segment (no [scalar]),
+// are returned unchanged with ok false.
+// A single segment with [scalar] selectors drops the selectors.
+// When the last segment has [scalar] selectors, only those selectors are removed.
+// Otherwise the last dot-separated segment is dropped.
+func (h Hypha) ParentResourceURL() (string, bool) {
+	if !h.URL {
+		return h.Path, false
+	}
+	if h.ResourceKind == "" || len(h.ResourcePath.Segments) == 0 {
+		return h.String(), false
+	}
+
+	segs := h.ResourcePath.Segments
+	var parentPath ResourcePath
+	switch len(segs) {
+	case 1:
+		if len(segs[0].Scalars) == 0 {
+			return h.String(), false
+		}
+		parentPath = resourcePathFromSegments([]ResourcePathSegment{{Name: segs[0].Name}})
+	default:
+		last := segs[len(segs)-1]
+		if len(last.Scalars) > 0 {
+			parentPath = resourcePathFromSegments(append(append([]ResourcePathSegment(nil), segs[:len(segs)-1]...), ResourcePathSegment{Name: last.Name}))
+		} else {
+			parentPath = resourcePathFromSegments(segs[:len(segs)-1])
+		}
+	}
+
+	return replaceResourcePath(h.Path, h.ResourceKind, h.ResourcePath.Raw, parentPath.Raw), true
+}
+
+// ParentResourceURL parses mushroomURL and returns its parent resource URL.
+func ParentResourceURL(mushroomURL string) (string, bool) {
+	hypha, err := (&Soil{}).Hypha(mushroomURL)
+	if err != nil {
+		return mushroomURL, false
+	}
+	return hypha.ParentResourceURL()
+}
+
+func replaceResourcePath(path string, kind ResourceKind, oldRaw, newRaw string) string {
+	marker := "?" + string(kind) + "=" + oldRaw
+	if idx := strings.Index(path, marker); idx != -1 {
+		return path[:idx] + "?" + string(kind) + "=" + newRaw
+	}
+
+	normalized := stripIgnoredRunes(path)
+	if idx := strings.Index(normalized, marker); idx != -1 {
+		return normalized[:idx] + "?" + string(kind) + "=" + newRaw
+	}
+
+	return path
+}
+
+func resourcePathFromSegments(segs []ResourcePathSegment) ResourcePath {
+	parts := make([]string, len(segs))
+	for i, seg := range segs {
+		parts[i] = resourceSegmentString(seg)
+	}
+	return ResourcePath{
+		Raw:      strings.Join(parts, "."),
+		Segments: append([]ResourcePathSegment(nil), segs...),
+	}
+}
+
+func resourceSegmentString(seg ResourcePathSegment) string {
+	var builder strings.Builder
+	builder.WriteString(seg.Name)
+	for _, scalar := range seg.Scalars {
+		builder.WriteByte('[')
+		builder.WriteString(resourceScalarString(scalar))
+		builder.WriteByte(']')
+	}
+	if seg.Call != nil {
+		builder.WriteByte('(')
+		builder.WriteString(resourceCallArgsString(seg.Call.Args))
+		builder.WriteByte(')')
+	}
+	return builder.String()
+}
+
+func resourceScalarString(scalar ResourceScalar) string {
+	switch scalar.Kind {
+	case ResourceScalarKeyValue:
+		return scalar.Key + ":" + scalar.Value
+	case ResourceScalarNumber:
+		return scalar.Value
+	case ResourceScalarKey:
+		return scalar.Key
+	case ResourceScalarCall:
+		if scalar.Call == nil {
+			return ""
+		}
+		return scalar.Call.Name + "(" + resourceCallArgsString(scalar.Call.Args) + ")"
+	default:
+		return ""
+	}
+}
+
+func resourceCallArgsString(args []ResourceScalar) string {
+	parts := make([]string, len(args))
+	for i, arg := range args {
+		parts[i] = resourceScalarString(arg)
+	}
+	return strings.Join(parts, ",")
+}
+
 type ResourcePathSegment struct {
 	Name    string
 	Scalars []ResourceScalar

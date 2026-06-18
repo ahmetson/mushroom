@@ -4,14 +4,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ahmetson/mushroom"
 )
 
 type Substrate struct {
 	url mushroom.Hypha
+	mu  sync.RWMutex
 }
 
 var _ mushroom.Substrate = (*Substrate)(nil)
@@ -25,19 +29,25 @@ type Mycelium struct {
 
 var _ mushroom.Mycelium = (*Mycelium)(nil)
 
-// Digest converts a JSON string into a JSON mycelium.
+// Root creates the initial mycelium colony by foraging the given path and then
+// digesting the content into a mycelium network with the initial substrate and soil.
 //
 // Example:
 //
-//	mycelium, err := json_substrate.Digest("pkg:json$#config.json", `{"port":8080}`)
-func Digest(url string, data string) (*Mycelium, error) {
+//	mycelium, err := json_substrate.Root("pkg:json/configs#app.json")
+func Root(mushroomURL string) (*Mycelium, error) {
 	substrate := &Substrate{}
 	soil := &mushroom.Soil{}
 	substrate.url = soil.Hypha("pkg:json/$#$.json")
 	if err := soil.AddSubstrate(substrate); err != nil {
 		return nil, err
 	}
-	got, err := substrate.Digest(url, data, soil)
+	hypha := soil.Hypha(mushroomURL)
+	data, err := substrate.Forage(hypha)
+	if err != nil {
+		return nil, err
+	}
+	got, err := substrate.Digest(hypha, data, soil)
 	if err != nil {
 		return nil, err
 	}
@@ -45,16 +55,15 @@ func Digest(url string, data string) (*Mycelium, error) {
 	return got.(*Mycelium), nil
 }
 
-func (substrate *Substrate) Digest(url string, data any, soil *mushroom.Soil) (mushroom.Mycelium, error) {
-	hypha := soil.Hypha(url)
-	if !hypha.URL {
+func (substrate *Substrate) Digest(url mushroom.Hypha, data any, soil *mushroom.Soil) (mushroom.Mycelium, error) {
+	if !url.URL {
 		return nil, fmt.Errorf("json substrate: digest URL must be a Mushroom URL")
 	}
-	if hypha.Dereference {
+	if url.Dereference {
 		return nil, fmt.Errorf("json substrate: digest URL must be a link")
 	}
-	if !substrate.url.Satisfies(hypha) {
-		return nil, fmt.Errorf("json substrate: digest URL %q does not satisfy %q", hypha.String(), substrate.url.String())
+	if !substrate.url.Satisfies(url) {
+		return nil, fmt.Errorf("json substrate: digest URL %q does not satisfy %q", url.String(), substrate.url.String())
 	}
 
 	decoded, err := decode(data)
@@ -64,7 +73,7 @@ func (substrate *Substrate) Digest(url string, data any, soil *mushroom.Soil) (m
 
 	substrateInterface := mushroom.Substrate(substrate)
 	return &Mycelium{
-		url:       hypha,
+		url:       url,
 		data:      decoded,
 		soil:      soil,
 		substrate: substrateInterface,
@@ -73,6 +82,65 @@ func (substrate *Substrate) Digest(url string, data any, soil *mushroom.Soil) (m
 
 func (substrate *Substrate) MushroomURL() string {
 	return substrate.url.String()
+}
+
+// Forage reads the JSON file identified by mushroomURL and returns its raw
+// content as a string. The file path is formed by joining PackageID and
+// ModuleID with filepath.Join. The returned string can be passed directly to
+// Digest. Reading is protected by a read lock so concurrent Forage calls do
+// not race with a concurrent Sow.
+//
+//	raw, err := substrate.Forage(soil.Hypha("pkg:json/configs#app.json"))
+//	mycelium, err := substrate.Digest("pkg:json/configs#app.json", raw, soil)
+func (substrate *Substrate) Forage(url mushroom.Hypha) (any, error) {
+	if !substrate.url.Satisfies(url) {
+		return nil, fmt.Errorf("json substrate: forage URL %q does not satisfy pattern %q", url.String(), substrate.url.String())
+	}
+	path := filepath.Join(url.PackageID, url.ModuleID)
+
+	substrate.mu.RLock()
+	data, err := os.ReadFile(path)
+	substrate.mu.RUnlock()
+
+	if err != nil {
+		return nil, fmt.Errorf("json substrate: forage %q: %w", path, err)
+	}
+	return string(data), nil
+}
+
+// Sow writes nutrients to the JSON file identified by mushroomURL.
+// The file path is formed by joining PackageID and ModuleID with filepath.Join.
+// data may be a string (written verbatim) or any JSON-marshalable value
+// (marshaled with two-space indentation). Writing is protected by a write lock
+// so concurrent Sow calls and Forage calls do not race.
+//
+//	err := substrate.Sow(soil.Hypha("pkg:json/configs#app.json"), updatedData)
+func (substrate *Substrate) Sow(url mushroom.Hypha, data any) error {
+	if !substrate.url.Satisfies(url) {
+		return fmt.Errorf("json substrate: sow URL %q does not satisfy pattern %q", url.String(), substrate.url.String())
+	}
+	path := filepath.Join(url.PackageID, url.ModuleID)
+
+	var raw []byte
+	switch v := data.(type) {
+	case string:
+		raw = []byte(v)
+	default:
+		var err error
+		raw, err = json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			return fmt.Errorf("json substrate: sow marshal: %w", err)
+		}
+	}
+
+	substrate.mu.Lock()
+	err := os.WriteFile(path, raw, 0o644)
+	substrate.mu.Unlock()
+
+	if err != nil {
+		return fmt.Errorf("json substrate: sow %q: %w", path, err)
+	}
+	return nil
 }
 
 // Link normalizes path into an absolute Mushroom link.

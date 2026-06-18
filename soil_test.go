@@ -451,10 +451,18 @@ type fakeSubstrate struct {
 	url string
 }
 
-func (substrate fakeSubstrate) Digest(string, any, *Soil) (Mycelium, error) {
+func (substrate fakeSubstrate) Digest(Hypha, any, *Soil) (Mycelium, error) {
 	return nil, nil
 }
 
 func (substrate fakeSubstrate) MushroomURL() string {
 	return substrate.url
+}
+
+func (substrate fakeSubstrate) Forage(Hypha) (any, error) {
+	return nil, nil
+}
+
+func (substrate fakeSubstrate) Sow(Hypha, any) error {
+	return nil
 }

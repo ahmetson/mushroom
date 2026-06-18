@@ -1,8 +1,8 @@
 package mushroom
 
 type Mycelium interface {
-	Link(string) (string, error)
-	Spore(string) (any, error)
+	Link(mushroomURL string) (string, error)
+	Spore(mushroomURL string) (any, error)
 	Fruit(any) (any, error)
 	Mineralize() (any, error)
 	MushroomURL() string

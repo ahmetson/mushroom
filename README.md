@@ -151,7 +151,7 @@ returns a JSON mycelium.
 
 ```go
 soil := &mushroom.Soil{}
-mycelium, err := substrate.Digest("pkg:json$#my-app-config.json", fileContent, soil)
+mycelium, err := substrate.Digest(soil.Hypha("pkg:json$#my-app-config.json"), fileContent, soil)
 if err != nil {
 	return err
 }
@@ -264,15 +264,39 @@ Tutorial:
 ```go
 import "github.com/ahmetson/mushroom/substrates/json_substrate"
 
-mycelium, _ := json_substrate.Digest(`pkg:json/./substrates/json_substrate/#noPerfection.json`, noPerfectionContent)
+mycelium, _ := json_substrate.Root(`pkg:json/./substrates/json_substrate/#noPerfection.json`)
 handlerPath, _ := mycelium.Link(`pkg:$?var=services[$.first()].handlers[category: main]`) // get absolute path to main handler in noPerfection.json
 handlerData, _ := mycelium.Spore("*" + handlerPath) //dereference the handler
 handlerData, _ = mycelium.Fruit(handlerData) // If handler data has mushroom urls they are dereferenced in a recursive mannger. For example handlers.outbounds[0].handlers is a package url as well.
 ```
 
-Json substrate doesn't work with the file syste. The path as a package and file name that ends with .json as a module name are convention for ourselves.
+The `PackageID` and `ModuleID` in the Mushroom URL are not just conventions — the substrate can use them directly to read and write files on the file system via `Forage` and `Sow` (see below).
 
 Json substrates also doesn't support `object` nor `func` resource kinds. Only variables.
+
+### Reading and writing files with a substrate
+
+`json_substrate.Substrate` implements the `mushroom.Substrate` interface's `Forage` and `Sow` methods.
+`Forage` combines the `PackageID` and `ModuleID` of the provided Mushroom URL into a file path, reads the file, and returns its raw content as a string. That string can be passed directly to `Digest`. The read is protected by a read lock, so concurrent `Forage` calls are safe.
+
+`Sow` is the inverse: it takes a Go value (`data any`) and writes it to the same derived file path. If `data` is already a string it is written verbatim; any other value is JSON-marshalled first. The write is protected by an exclusive lock, preventing races with concurrent `Forage` or `Sow` calls.
+
+```go
+import "github.com/ahmetson/mushroom/substrates/json_substrate"
+
+// Root forages the file and digests it in one step.
+mycelium, _ := json_substrate.Root("pkg:json/configs#app.json")
+
+// Access the substrate from the mycelium for Forage / Sow.
+substrate := (*mycelium.Substrate()).(*json_substrate.Substrate)
+soil := mycelium.Soil()
+configURL := soil.Hypha("pkg:json/configs#app.json")
+
+// Mutate in memory, then persist back to disk.
+mycelium.Inoculate("pkg:$?var=port", 9090)
+updated, _ := mycelium.Mineralize()
+substrate.Sow(configURL, updated)
+```
 
 ### Mutating a JSON mycelium
 

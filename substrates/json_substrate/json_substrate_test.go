@@ -3,6 +3,7 @@ package json_substrate
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ahmetson/mushroom"
@@ -12,12 +13,27 @@ func TestSubstrateImplementsMushroomSubstrate(t *testing.T) {
 	var _ mushroom.Substrate = (*Substrate)(nil)
 }
 
+// digest is a test helper that digests inline data without touching the file
+// system, mirroring the old standalone Digest function.
+func digest(url string, data string) (*Mycelium, error) {
+	soil := &mushroom.Soil{}
+	substrate := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
+	if err := soil.AddSubstrate(substrate); err != nil {
+		return nil, err
+	}
+	got, err := substrate.Digest(soil.Hypha(url), data, soil)
+	if err != nil {
+		return nil, err
+	}
+	return got.(*Mycelium), nil
+}
+
 func TestMyceliumImplementsMushroomMycelium(t *testing.T) {
 	var _ mushroom.Mycelium = (*Mycelium)(nil)
 }
 
 func TestDigestAcceptsString(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#my-app-config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#my-app-config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -43,7 +59,7 @@ func TestSubstrateDigestRejectsBytes(t *testing.T) {
 	soil := &mushroom.Soil{}
 	substrate := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
 
-	if _, err := substrate.Digest("pkg:json$#my-app-config.json", []byte(`{"port":8080}`), soil); err == nil {
+	if _, err := substrate.Digest(soil.Hypha("pkg:json$#my-app-config.json"), []byte(`{"port":8080}`), soil); err == nil {
 		t.Fatal("Digest returned nil error, want unsupported bytes error")
 	}
 }
@@ -52,7 +68,7 @@ func TestDigestUsesProvidedSoil(t *testing.T) {
 	soil := &mushroom.Soil{}
 	substrate := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
 
-	got, err := substrate.Digest("pkg:json$#my-app-config.json", `{"port":8080}`, soil)
+	got, err := substrate.Digest(soil.Hypha("pkg:json$#my-app-config.json"), `{"port":8080}`, soil)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -67,7 +83,7 @@ func TestDigestUsesProvidedSoil(t *testing.T) {
 }
 
 func TestDigestAddsJSONSubstrateToNewSoil(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#my-app-config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#my-app-config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -82,7 +98,7 @@ func TestDigestAddsJSONSubstrateToNewSoil(t *testing.T) {
 }
 
 func TestJSONSubstratePatternRecognizesJSONModules(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#my-app-config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#my-app-config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -97,7 +113,7 @@ func TestJSONSubstratePatternRecognizesJSONModules(t *testing.T) {
 }
 
 func TestJSONSubstratePatternRejectsOtherJSONLikeTypes(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#my-app-config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#my-app-config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -108,7 +124,7 @@ func TestJSONSubstratePatternRejectsOtherJSONLikeTypes(t *testing.T) {
 }
 
 func TestSporeReturnsJSONValue(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"services":[{"hostname":"localhost","port":8080}]}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"services":[{"hostname":"localhost","port":8080}]}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -128,7 +144,7 @@ func TestSporeReturnsJSONValue(t *testing.T) {
 }
 
 func TestSporeReturnsPortVar(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -148,7 +164,7 @@ func TestSporeReturnsPortVar(t *testing.T) {
 }
 
 func TestSporeReturnsSymbolic(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -163,7 +179,7 @@ func TestSporeReturnsSymbolic(t *testing.T) {
 }
 
 func TestSporeRejectsLinkURL(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -175,7 +191,7 @@ func TestSporeRejectsLinkURL(t *testing.T) {
 }
 
 func TestSporeRejectsModuleDereference(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -187,7 +203,7 @@ func TestSporeRejectsModuleDereference(t *testing.T) {
 }
 
 func TestSporeTraversesArrayRootNameKey(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `[{"name":"alpha","key":"match"},{"name":"beta"}]`)
+	mycelium, err := digest("pkg:json$#config.json", `[{"name":"alpha","key":"match"},{"name":"beta"}]`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -202,7 +218,7 @@ func TestSporeTraversesArrayRootNameKey(t *testing.T) {
 }
 
 func TestSporeTraversesNestedPath(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"outer":{"inner":{"port":3000}}}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"outer":{"inner":{"port":3000}}}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -225,7 +241,7 @@ func TestSporeEvaluatesSegmentLevelLambda(t *testing.T) {
 	// Lambda at segment level: (*pkg:$?var=fieldName) is resolved to the value
 	// of fieldName ("port"), which is then used as the segment name, yielding
 	// the same result as Spore("pkg:$?*var=port").
-	mycelium, err := Digest("pkg:json$#config.json", `{"fieldName":"port","port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"fieldName":"port","port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -248,7 +264,7 @@ func TestSporeEvaluatesDereferenceLambdaInKeyValueFilter(t *testing.T) {
 	// Lambda in the value position of a key:value filter:
 	// services[name:(*pkg:$?var=key)] resolves the lambda to the value of "key"
 	// and uses the result as the filter value — equivalent to services[name:foo].
-	mycelium, err := Digest("pkg:json$#config.json",
+	mycelium, err := digest("pkg:json$#config.json",
 		`{"key":"foo","services":[{"name":"foo","port":9000},{"name":"bar","port":9001}]}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
@@ -270,7 +286,7 @@ func TestSporeEvaluatesDereferenceLambdaInKeyValueFilter(t *testing.T) {
 }
 
 func TestFruitEvaluatesDereferenceLinks(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -297,7 +313,7 @@ func TestFruitEvaluatesDereferenceLinks(t *testing.T) {
 }
 
 func TestMineralizeReturnsJSONFormat(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{
+	mycelium, err := digest("pkg:json$#config.json", `{
 		"hostname": "localhost",
 		"port": 8080
 	}`)
@@ -317,7 +333,7 @@ func TestMineralizeReturnsJSONFormat(t *testing.T) {
 }
 
 func TestLinkRejectsDereference(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -328,31 +344,31 @@ func TestLinkRejectsDereference(t *testing.T) {
 }
 
 func TestDigestRejectsNonMushroomURL(t *testing.T) {
-	if _, err := Digest("config.json", `{"port":8080}`); err == nil {
+	if _, err := digest("config.json", `{"port":8080}`); err == nil {
 		t.Fatal("Digest returned nil error, want invalid URL error")
 	}
 }
 
 func TestDigestRejectsDereferenceURL(t *testing.T) {
-	if _, err := Digest("*pkg:json$#config.json", `{"port":8080}`); err == nil {
+	if _, err := digest("*pkg:json$#config.json", `{"port":8080}`); err == nil {
 		t.Fatal("Digest returned nil error, want dereference URL error")
 	}
 }
 
 func TestDigestRejectsNonJSONType(t *testing.T) {
-	if _, err := Digest("pkg:golang$#config.json", `{"port":8080}`); err == nil {
+	if _, err := digest("pkg:golang$#config.json", `{"port":8080}`); err == nil {
 		t.Fatal("Digest returned nil error, want invalid type error")
 	}
 }
 
 func TestDigestRejectsNonJSONModuleID(t *testing.T) {
-	if _, err := Digest("pkg:json$#config.txt", `{"port":8080}`); err == nil {
+	if _, err := digest("pkg:json$#config.txt", `{"port":8080}`); err == nil {
 		t.Fatal("Digest returned nil error, want invalid module id error")
 	}
 }
 
 func TestLinkFillsTypeAndModuleFromMyceliumURL(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -369,7 +385,7 @@ func TestLinkFillsTypeAndModuleFromMyceliumURL(t *testing.T) {
 
 func TestLinkFillsModuleFromMyceliumURL(t *testing.T) {
 	// pkg:json$?var=port has no module (#). Link fills it from the mycelium URL.
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -385,7 +401,7 @@ func TestLinkFillsModuleFromMyceliumURL(t *testing.T) {
 }
 
 func TestLinkRejectsNonExistentResource(t *testing.T) {
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -399,7 +415,7 @@ func TestLinkRejectsURLWithoutWildcard(t *testing.T) {
 	// pkg:?var=port has no $ wildcard anywhere in Type, PackageID, or ModuleID.
 	// fillHyphaFromDefault must NOT fill empty fields in this case, so the URL
 	// stays unrecognized and Link must return an error.
-	mycelium, err := Digest("pkg:json$#config.json", `{"port":8080}`)
+	mycelium, err := digest("pkg:json$#config.json", `{"port":8080}`)
 	if err != nil {
 		t.Fatalf("Digest returned error: %v", err)
 	}
@@ -414,7 +430,7 @@ func TestNoPerfectionMycelium(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	noPerfMycelium, err := Digest("pkg:json$#noPerfection.json", string(raw))
+	noPerfMycelium, err := digest("pkg:json$#noPerfection.json", string(raw))
 	if err != nil {
 		t.Fatalf("Digest: %v", err)
 	}
@@ -780,7 +796,7 @@ func loadNoPerfection(t *testing.T) *Mycelium {
 	if err != nil {
 		t.Fatalf("ReadFile(noPerfection.json): %v", err)
 	}
-	m, err := Digest("pkg:json$#noPerfection.json", string(raw))
+	m, err := digest("pkg:json$#noPerfection.json", string(raw))
 	if err != nil {
 		t.Fatalf("Digest(noPerfection.json): %v", err)
 	}
@@ -957,6 +973,87 @@ func TestGraftAndPruneOutbound(t *testing.T) {
 	remaining, ok := outbounds[0].(map[string]any)
 	if !ok || remaining["name"] != "new-outbound" {
 		t.Fatalf("remaining outbound name = %v, want %q", remaining["name"], "new-outbound")
+	}
+}
+
+// TestSubstrateForageAndSow verifies the full Forage → Sow → Forage round-trip.
+//
+//  1. Sow writes a JSON file into a temp directory.
+//  2. Forage reads it back and returns the raw string.
+//  3. The round-tripped content decodes to the same data.
+//
+// It also confirms that a URL which does not satisfy the substrate pattern is
+// rejected by both Forage and Sow.
+func TestSubstrateForageAndSow(t *testing.T) {
+	dir := t.TempDir()
+
+	soil := &mushroom.Soil{}
+	s := &Substrate{url: soil.Hypha("pkg:json/$#$.json")}
+
+	// Build a Hypha pointing at dir/data.json.  We construct it directly so
+	// that we can supply the absolute temp-dir path as PackageID.
+	fileURL := mushroom.Hypha{
+		URL:       true,
+		Type:      "json",
+		PackageID: dir,
+		ModuleID:  "data.json",
+	}
+
+	original := map[string]any{"port": float64(8080), "name": "test-app"}
+
+	// Sow the map (non-string data path – marshalled to JSON).
+	if err := s.Sow(fileURL, original); err != nil {
+		t.Fatalf("Sow: %v", err)
+	}
+
+	// Confirm the file was actually written.
+	if _, err := os.Stat(filepath.Join(dir, "data.json")); err != nil {
+		t.Fatalf("file not found after Sow: %v", err)
+	}
+
+	// Forage reads it back.
+	raw, err := s.Forage(fileURL)
+	if err != nil {
+		t.Fatalf("Forage: %v", err)
+	}
+	rawStr, ok := raw.(string)
+	if !ok {
+		t.Fatalf("Forage returned %T, want string", raw)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(rawStr), &decoded); err != nil {
+		t.Fatalf("unmarshal Forage result: %v", err)
+	}
+	if decoded["port"] != float64(8080) || decoded["name"] != "test-app" {
+		t.Fatalf("round-trip data mismatch: got %v", decoded)
+	}
+
+	// Sow with a pre-marshalled string must also round-trip correctly.
+	rawJSON := `{"version":"2.0"}`
+	if err := s.Sow(fileURL, rawJSON); err != nil {
+		t.Fatalf("Sow(string): %v", err)
+	}
+	raw2, err := s.Forage(fileURL)
+	if err != nil {
+		t.Fatalf("Forage after string Sow: %v", err)
+	}
+	if raw2.(string) != rawJSON {
+		t.Fatalf("string round-trip: got %q, want %q", raw2.(string), rawJSON)
+	}
+
+	// A URL that does not satisfy the substrate pattern must be rejected.
+	badURL := mushroom.Hypha{
+		URL:       true,
+		Type:      "yaml",
+		PackageID: dir,
+		ModuleID:  "data.yaml",
+	}
+	if _, err := s.Forage(badURL); err == nil {
+		t.Fatal("Forage(badURL): expected error, got nil")
+	}
+	if err := s.Sow(badURL, "{}"); err == nil {
+		t.Fatal("Sow(badURL): expected error, got nil")
 	}
 }
 

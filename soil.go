@@ -149,21 +149,15 @@ func (path ResourcePath) String() string {
 	return path.Raw
 }
 
-// ParentResourceURL returns the parent dereference Mushroom URL of h's resource
-// path, with the last path step removed.
-//
-// Symbolic paths (no pkg: prefix) are returned unchanged with ok false.
-// URLs without a resource path, or with a single plain segment (no [scalar]),
-// are returned unchanged with ok false.
-// A single segment with [scalar] selectors drops the selectors.
-// When the last segment has [scalar] selectors, only those selectors are removed.
-// Otherwise the last dot-separated segment is dropped.
-func (h Hypha) ParentResourceURL() (string, bool) {
+// ParentResource returns a copy of h with the parent resource path, with the
+// last path step removed. Link and dereference flags are preserved.
+// See ParentResourceURL for ok semantics.
+func (h Hypha) ParentResource() (Hypha, bool) {
 	if !h.URL {
-		return h.Path, false
+		return h, false
 	}
 	if h.ResourceKind == "" || len(h.ResourcePath.Segments) == 0 {
-		return h.String(), false
+		return h, false
 	}
 
 	segs := h.ResourcePath.Segments
@@ -171,7 +165,7 @@ func (h Hypha) ParentResourceURL() (string, bool) {
 	switch len(segs) {
 	case 1:
 		if len(segs[0].Scalars) == 0 {
-			return h.String(), false
+			return h, false
 		}
 		parentPath = resourcePathFromSegments([]ResourcePathSegment{{Name: segs[0].Name}})
 	default:
@@ -183,7 +177,30 @@ func (h Hypha) ParentResourceURL() (string, bool) {
 		}
 	}
 
-	return replaceResourcePath(h.Path, h.ResourceKind, h.ResourcePath.Raw, parentPath.Raw), true
+	result := h
+	result.ResourcePath = parentPath
+	result.Path = replaceResourcePath(h.Path, h.ResourceKind, h.ResourcePath.Raw, parentPath.Raw)
+	return result, true
+}
+
+// ParentResourceURL returns the parent Mushroom URL string of h's resource path,
+// with the last path step removed.
+//
+// Symbolic paths (no pkg: prefix) are returned unchanged with ok false.
+// URLs without a resource path, or with a single plain segment (no [scalar]),
+// are returned unchanged with ok false.
+// A single segment with [scalar] selectors drops the selectors.
+// When the last segment has [scalar] selectors, only those selectors are removed.
+// Otherwise the last dot-separated segment is dropped.
+func (h Hypha) ParentResourceURL() (string, bool) {
+	parent, ok := h.ParentResource()
+	if !ok {
+		if !h.URL {
+			return h.Path, false
+		}
+		return h.String(), false
+	}
+	return parent.String(), true
 }
 
 // ParentResourceURL parses mushroomURL and returns its parent resource URL.
@@ -193,6 +210,59 @@ func ParentResourceURL(mushroomURL string) (string, bool) {
 		return mushroomURL, false
 	}
 	return hypha.ParentResourceURL()
+}
+
+func resourceSegmentHasData(seg ResourcePathSegment) bool {
+	return len(seg.Scalars) > 0 || seg.Call != nil
+}
+
+// ChildResource extends h's resource path with child.
+//
+// When child is a scalar (starts with '[' and ends with ']'), it is appended to
+// the last segment's selectors. The last segment must not already have selectors
+// or a call; otherwise an error is returned.
+//
+// When child is not a scalar, it is parsed as a new dot-separated segment and
+// appended to the path. All spaces in child are trimmed.
+func (h Hypha) ChildResource(child string) (Hypha, error) {
+	child = stripIgnoredRunes(strings.TrimSpace(child))
+	if child == "" {
+		return Hypha{}, fmt.Errorf("mushroom: child resource is empty")
+	}
+	if !h.URL {
+		return Hypha{}, fmt.Errorf("mushroom: child resource requires a mushroom URL")
+	}
+	if h.ResourceKind == "" || len(h.ResourcePath.Segments) == 0 {
+		return Hypha{}, fmt.Errorf("mushroom: child resource requires a resource path")
+	}
+
+	var nextPath ResourcePath
+	if strings.HasPrefix(child, "[") && strings.HasSuffix(child, "]") {
+		scalar, ok := parseResourceScalar(stripIgnoredRunes(child[1 : len(child)-1]))
+		if !ok {
+			return Hypha{}, fmt.Errorf("mushroom: invalid child scalar %q", child)
+		}
+
+		segs := append([]ResourcePathSegment(nil), h.ResourcePath.Segments...)
+		last := segs[len(segs)-1]
+		if resourceSegmentHasData(last) {
+			return Hypha{}, fmt.Errorf("mushroom: last segment %q already has selectors", last.Name)
+		}
+		last.Scalars = append(last.Scalars, scalar)
+		segs[len(segs)-1] = last
+		nextPath = resourcePathFromSegments(segs)
+	} else {
+		segment, ok := parseResourcePathSegment(child)
+		if !ok {
+			return Hypha{}, fmt.Errorf("mushroom: invalid child segment %q", child)
+		}
+		nextPath = resourcePathFromSegments(append(append([]ResourcePathSegment(nil), h.ResourcePath.Segments...), segment))
+	}
+
+	result := h
+	result.ResourcePath = nextPath
+	result.Path = replaceResourcePath(h.Path, h.ResourceKind, h.ResourcePath.Raw, nextPath.Raw)
+	return result, nil
 }
 
 func replaceResourcePath(path string, kind ResourceKind, oldRaw, newRaw string) string {

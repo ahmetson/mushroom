@@ -368,6 +368,10 @@ func (mycelium *Mycelium) MushroomURL() string {
 	return mycelium.url.String()
 }
 
+func (mycelium *Mycelium) MyceliumURL() mushroom.Hypha {
+	return mycelium.url
+}
+
 func (mycelium *Mycelium) Soil() *mushroom.Soil {
 	return mycelium.soil
 }
@@ -601,7 +605,6 @@ func applyScalar(current any, scalar mushroom.ResourceScalar) (any, error) {
 		return nil, fmt.Errorf("json substrate: unsupported scalar kind %q", scalar.Kind)
 	}
 }
-
 
 // resolveSegments parses path into concrete resource-path segments.
 func (mycelium *Mycelium) resolveSegments(path string) ([]mushroom.ResourcePathSegment, error) {

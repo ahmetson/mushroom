@@ -503,7 +503,7 @@ func TestParentResourceURLSinglePlainSegment(t *testing.T) {
 func TestParentResourceURLSingleIndexedSegment(t *testing.T) {
 	const (
 		url  = "pkg:$?var=services[name:proxy]"
-		want = "pkg:$?var=services"
+		want = "pkg:$#$?var=services"
 	)
 	parent, ok := ParentResourceURL(url)
 	if !ok {
@@ -517,7 +517,7 @@ func TestParentResourceURLSingleIndexedSegment(t *testing.T) {
 func TestParentResourceURLMultiSegment(t *testing.T) {
 	const (
 		url  = "*pkg:$?var=services[name:proxy].handlers[category:main].outbounds"
-		want = "*pkg:$?var=services[name:proxy].handlers[category:main]"
+		want = "*pkg:$#$?var=services[name:proxy].handlers[category:main]"
 	)
 	parent, ok := ParentResourceURL(url)
 	if !ok {
@@ -531,7 +531,7 @@ func TestParentResourceURLMultiSegment(t *testing.T) {
 func TestParentResourceURLTrimsHandlerSegment(t *testing.T) {
 	const (
 		url  = "*pkg:$?var=services[name:proxy].handlers[category:main]"
-		want = "*pkg:$?var=services[name:proxy].handlers"
+		want = "*pkg:$#$?var=services[name:proxy].handlers"
 	)
 	parent, ok := ParentResourceURL(url)
 	if !ok {
@@ -552,8 +552,112 @@ func TestHyphaParentResourceURL(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	const want = "*pkg:$?var=services[name:proxy].handlers[category:main]"
+	const want = "*pkg:$#$?var=services[name:proxy].handlers[category:main]"
 	if parent != want {
 		t.Fatalf("parent = %q, want %q", parent, want)
+	}
+}
+
+func TestHyphaParentResource(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services[type:Proxy]")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+
+	parent, ok := hypha.ParentResource()
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	const want = "*pkg:$#$?var=services"
+	if parent.String() != want {
+		t.Fatalf("parent = %q, want %q", parent.String(), want)
+	}
+}
+
+func TestHyphaChildResourceScalar(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+
+	child, err := hypha.ChildResource("[name:proxy]")
+	if err != nil {
+		t.Fatalf("ChildResource returned error: %v", err)
+	}
+	const want = "*pkg:$#$?var=services[name:proxy]"
+	if child.String() != want {
+		t.Fatalf("child = %q, want %q", child.String(), want)
+	}
+}
+
+func TestHyphaChildResourceScalarTrimsSpaces(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+
+	child, err := hypha.ChildResource(" [name: proxy] ")
+	if err != nil {
+		t.Fatalf("ChildResource returned error: %v", err)
+	}
+	const want = "*pkg:$#$?var=services[name:proxy]"
+	if child.String() != want {
+		t.Fatalf("child = %q, want %q", child.String(), want)
+	}
+}
+
+func TestHyphaChildResourceScalarOnOccupiedSegment(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services[type:Proxy]")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+
+	if _, err := hypha.ChildResource("[name:proxy]"); err == nil {
+		t.Fatal("ChildResource returned nil error, want occupied segment error")
+	}
+}
+
+func TestHyphaChildResourceSegment(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services[name:proxy]")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+
+	child, err := hypha.ChildResource("handlers")
+	if err != nil {
+		t.Fatalf("ChildResource returned error: %v", err)
+	}
+	const want = "*pkg:$#$?var=services[name:proxy].handlers"
+	if child.String() != want {
+		t.Fatalf("child = %q, want %q", child.String(), want)
+	}
+}
+
+func TestHyphaChildResourceParentRoundTrip(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services[name:proxy].handlers[category:main]")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+
+	parent, ok := hypha.ParentResource()
+	if !ok {
+		t.Fatal("ParentResource ok = false, want true")
+	}
+	grandparent, ok := parent.ParentResource()
+	if !ok {
+		t.Fatal("ParentResource ok = false, want true")
+	}
+
+	restored, err := grandparent.ChildResource("handlers")
+	if err != nil {
+		t.Fatalf("ChildResource(handlers): %v", err)
+	}
+	restored, err = restored.ChildResource("[category:main]")
+	if err != nil {
+		t.Fatalf("ChildResource([category:main]): %v", err)
+	}
+
+	if restored.String() != hypha.String() {
+		t.Fatalf("round trip = %q, want %q", restored.String(), hypha.String())
 	}
 }

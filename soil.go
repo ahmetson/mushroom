@@ -747,23 +747,38 @@ func parseModule(moduleID string, hypha *Hypha) {
 }
 
 func parseResource(resource string, hypha *Hypha) {
-	resourcePart, additionalProps, _ := strings.Cut(resource, "&")
-	hypha.AdditionalProps = parseAdditionalProps(additionalProps)
-
-	kind, value, ok := strings.Cut(resourcePart, "=")
-	if !ok {
+	if resource == "" {
 		return
 	}
 
-	switch kind {
-	case string(ResourceKindVar), string(ResourceKindFunc), string(ResourceKindObj):
-		resourceKind := ResourceKind(kind)
-		resourcePath, ok := parseResourcePath(value, resourceKind)
+	additional := make(map[string]string)
+	for _, pair := range strings.Split(resource, "&") {
+		key, value, ok := strings.Cut(pair, "=")
 		if !ok {
-			return
+			continue
 		}
-		hypha.ResourceKind = resourceKind
-		hypha.ResourcePath = resourcePath
+
+		switch key {
+		case string(ResourceKindVar), string(ResourceKindFunc), string(ResourceKindObj):
+			if hypha.ResourceKind != "" {
+				additional[key] = value
+				continue
+			}
+			resourceKind := ResourceKind(key)
+			resourcePath, ok := parseResourcePath(value, resourceKind)
+			if !ok {
+				additional[key] = value
+				continue
+			}
+			hypha.ResourceKind = resourceKind
+			hypha.ResourcePath = resourcePath
+		default:
+			additional[key] = value
+		}
+	}
+
+	if len(additional) > 0 {
+		hypha.AdditionalProps = additional
 	}
 }
 

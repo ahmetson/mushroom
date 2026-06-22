@@ -45,6 +45,38 @@ func TestHyphaDetectsMushroomURLAfterWhitespaceNormalization(t *testing.T) {
 	}
 }
 
+func TestHyphaParsesAdditionalPropsWithoutResource(t *testing.T) {
+	const root = "/home/medet/noPerfection/service/examples/009-inproc-services"
+	url := "pkg:golang/github.com/noPerfection/service/examples/009-inproc-services/cmd/service#cmd/service?root=" + root
+
+	hypha, err := (&Soil{}).Hypha(url)
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+	if hypha.ResourceKind != "" {
+		t.Fatalf("ResourceKind = %q, want empty", hypha.ResourceKind)
+	}
+	if hypha.AdditionalProps["root"] != root {
+		t.Fatalf("AdditionalProps[root] = %q, want %q", hypha.AdditionalProps["root"], root)
+	}
+	if got := hypha.String(); got != url {
+		t.Fatalf("String() = %q, want %q", got, url)
+	}
+}
+
+func TestHyphaParsesResourceAndLeadingAdditionalProps(t *testing.T) {
+	hypha, err := (&Soil{}).Hypha("*pkg:$?var=services&category=manager")
+	if err != nil {
+		t.Fatalf("Hypha returned error: %v", err)
+	}
+	if hypha.ResourceKind != ResourceKindVar {
+		t.Fatalf("ResourceKind = %q, want %q", hypha.ResourceKind, ResourceKindVar)
+	}
+	if hypha.AdditionalProps["category"] != "manager" {
+		t.Fatalf("AdditionalProps[category] = %q, want %q", hypha.AdditionalProps["category"], "manager")
+	}
+}
+
 func TestHyphaDetectsNonURL(t *testing.T) {
 	hypha, _ := (&Soil{}).Hypha("hello world")
 

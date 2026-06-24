@@ -29,16 +29,30 @@ type Mycelium struct {
 
 var _ mushroom.Mycelium = (*Mycelium)(nil)
 
+// New returns a JSON substrate registered with the pattern pkg:json/$#$.json.
+func New() mushroom.Substrate {
+	substrate := &Substrate{}
+	soil := &mushroom.Soil{}
+	substrate.url, _ = soil.Hypha("pkg:json/$#$.json")
+	return substrate
+}
+
 // Root creates the initial mycelium colony by foraging the given path and then
 // digesting the content into a mycelium network with the initial substrate and soil.
+// Optional substrates are registered in the soil before germination.
 //
 // Example:
 //
 //	mycelium, err := json_substrate.Root("pkg:json/configs#app.json")
-func Root(mushroomURL string) (*Mycelium, error) {
-	substrate := &Substrate{}
+//	mycelium, err := json_substrate.Root("pkg:json/configs#app.json", otherSubstrate)
+func Root(mushroomURL string, substrates ...mushroom.Substrate) (*Mycelium, error) {
+	substrate := New()
 	soil := &mushroom.Soil{}
-	substrate.url, _ = soil.Hypha("pkg:json/$#$.json")
+	for _, s := range substrates {
+		if err := soil.AddSubstrate(s); err != nil {
+			return nil, err
+		}
+	}
 	hypha, err := soil.Hypha(mushroomURL)
 	if err != nil {
 		return nil, err

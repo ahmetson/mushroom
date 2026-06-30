@@ -315,29 +315,32 @@ func (mycelium *Mycelium) Mineralize() (any, error) {
 
 // Inoculate overwrites the value at path with value.
 //
-// The path uses the same pkg:$?var=… syntax as Spore.
+// The path uses the same pkg:$?var=… syntax as Spore. Wildcards in the
+// module URL are resolved from this mycelium; when the path names a different
+// module the mutation is delegated to that colony (germinating it on demand).
 // It supports:
 //   - Simple field: pkg:$?var=services[0].port — sets the port field on the first service.
 //   - Indexed element: pkg:$?var=services[0] — replaces the first service entirely.
 //   - Filtered element: pkg:$?var=services[name:foo].port — sets port on the named service.
-//   - Nested: pkg:$?var=services[name:foo].handlers[category:main].outbounds[name:bar].handlers
+//   - Module root: pkg:$#$ or pkg:json$#config.json — replaces the entire JSON document.
 //
 // The mutation is in-memory. Call SaveToFile or Mineralize to persist it.
 func (mycelium *Mycelium) Inoculate(path string, value any) error {
-	segs, err := mycelium.resolveSegments(path)
+	target, hypha, err := mycelium.resolveColonyForMutation(path)
 	if err != nil {
 		return err
 	}
-	parent, last, err := mycelium.navigateToParent(segs)
-	if err != nil {
-		return err
+	if target != mycelium {
+		return target.Inoculate(path, value)
 	}
-	return applySetToParent(parent, last, value)
+	return target.inoculateLocal(hypha, value)
 }
 
 // Graft appends item to the array at path.
 //
 // The path must point to an array field (no scalar filter on the final segment).
+// Wildcards in the module URL are resolved from this mycelium; when the path
+// names a different module the mutation is delegated to that colony.
 // Example:
 //
 //	mycelium.Graft("pkg:$?var=services", newServiceMap)
@@ -345,21 +348,22 @@ func (mycelium *Mycelium) Inoculate(path string, value any) error {
 //
 // The mutation is in-memory. Call SaveToFile or Mineralize to persist it.
 func (mycelium *Mycelium) Graft(path string, item any) error {
-	segs, err := mycelium.resolveSegments(path)
+	target, hypha, err := mycelium.resolveColonyForMutation(path)
 	if err != nil {
 		return err
 	}
-	parent, last, err := mycelium.navigateToParent(segs)
-	if err != nil {
-		return err
+	if target != mycelium {
+		return target.Graft(path, item)
 	}
-	return applyGraftToParent(parent, last, item)
+	return target.graftLocal(hypha, item)
 }
 
 // Prune removes all items matching path from their parent array.
 //
 // The final path segment must include a scalar filter (key:value) to identify
 // the elements to remove. Without a filter the entire array is cleared.
+// Wildcards in the module URL are resolved from this mycelium; when the path
+// names a different module the mutation is delegated to that colony.
 // Example:
 //
 //	mycelium.Prune("pkg:$?var=services[name:foo]")
@@ -367,15 +371,106 @@ func (mycelium *Mycelium) Graft(path string, item any) error {
 //
 // The mutation is in-memory. Call SaveToFile or Mineralize to persist it.
 func (mycelium *Mycelium) Prune(path string) error {
-	segs, err := mycelium.resolveSegments(path)
+	target, hypha, err := mycelium.resolveColonyForMutation(path)
 	if err != nil {
 		return err
 	}
-	parent, last, err := mycelium.navigateToParent(segs)
+	if target != mycelium {
+		return target.Prune(path)
+	}
+	return target.pruneLocal(hypha)
+}
+
+func (mycelium *Mycelium) inoculateLocal(hypha mushroom.Hypha, value any) error {
+	if len(hypha.ResourcePath.Segments) == 0 {
+		decoded, err := decodeMutationValue(value)
+		if err != nil {
+			return err
+		}
+		mycelium.data = decoded
+		return nil
+	}
+	parent, last, err := mycelium.navigateToParent(hypha.ResourcePath.Segments)
+	if err != nil {
+		return err
+	}
+	return applySetToParent(parent, last, value)
+}
+
+func decodeMutationValue(value any) (any, error) {
+	if raw, ok := value.(string); ok {
+		return decode(raw)
+	}
+	return value, nil
+}
+
+func (mycelium *Mycelium) graftLocal(hypha mushroom.Hypha, item any) error {
+	if len(hypha.ResourcePath.Segments) == 0 {
+		return fmt.Errorf("json substrate: empty resource path")
+	}
+	parent, last, err := mycelium.navigateToParent(hypha.ResourcePath.Segments)
+	if err != nil {
+		return err
+	}
+	return applyGraftToParent(parent, last, item)
+}
+
+func (mycelium *Mycelium) pruneLocal(hypha mushroom.Hypha) error {
+	if len(hypha.ResourcePath.Segments) == 0 {
+		return fmt.Errorf("json substrate: empty resource path")
+	}
+	parent, last, err := mycelium.navigateToParent(hypha.ResourcePath.Segments)
 	if err != nil {
 		return err
 	}
 	return applyPruneToParent(parent, last)
+}
+
+// resolveColonyForMutation resolves path into the colony that owns the target
+// module, germinating unknown JSON modules on demand (same routing as Spore).
+func (mycelium *Mycelium) resolveColonyForMutation(path string) (*Mycelium, mushroom.Hypha, error) {
+	var hypha mushroom.Hypha
+	for {
+		var err error
+		hypha, err = mycelium.soil.Hypha(path, mycelium.url)
+		if err == nil {
+			break
+		}
+		var unrecognized *mushroom.ErrUnrecognizedMycelium
+		if !errors.As(err, &unrecognized) {
+			return nil, mushroom.Hypha{}, err
+		}
+		if _, germinateErr := mycelium.soil.Germinate(unrecognized.Hypha, unrecognized.Substrate); germinateErr != nil {
+			return nil, mushroom.Hypha{}, fmt.Errorf("json substrate: %q: %w", path, germinateErr)
+		}
+	}
+
+	if !hypha.URL {
+		return mycelium, hypha, nil
+	}
+
+	colony, substrate, recognizeErr := mycelium.soil.Recognize(hypha)
+	if recognizeErr != nil {
+		return nil, hypha, fmt.Errorf("json substrate: %q: %w", path, recognizeErr)
+	}
+
+	if colony != nil {
+		target, ok := colony.(*Mycelium)
+		if !ok {
+			return nil, hypha, fmt.Errorf("json substrate: %q: colony is %T, want *json_substrate.Mycelium", path, colony)
+		}
+		return target, hypha, nil
+	}
+
+	m, germinateErr := mycelium.soil.Germinate(hypha, substrate)
+	if germinateErr != nil {
+		return nil, hypha, fmt.Errorf("json substrate: %q: %w", path, germinateErr)
+	}
+	target, ok := m.(*Mycelium)
+	if !ok {
+		return nil, hypha, fmt.Errorf("json substrate: %q: germinated colony is %T, want *json_substrate.Mycelium", path, m)
+	}
+	return target, hypha, nil
 }
 
 func (mycelium *Mycelium) MushroomURL() string {
@@ -618,18 +713,6 @@ func applyScalar(current any, scalar mushroom.ResourceScalar) (any, error) {
 	default:
 		return nil, fmt.Errorf("json substrate: unsupported scalar kind %q", scalar.Kind)
 	}
-}
-
-// resolveSegments parses path into concrete resource-path segments.
-func (mycelium *Mycelium) resolveSegments(path string) ([]mushroom.ResourcePathSegment, error) {
-	hypha, err := mycelium.soil.Hypha(path, mycelium.url)
-	if err != nil {
-		return nil, err
-	}
-	if len(hypha.ResourcePath.Segments) == 0 {
-		return nil, fmt.Errorf("json substrate: empty resource path")
-	}
-	return hypha.ResourcePath.Segments, nil
 }
 
 // navigateToParent returns the direct parent container and the last segment.

@@ -37,6 +37,20 @@ func digest(url string, data string) (*Mycelium, error) {
 	return got.(*Mycelium), nil
 }
 
+// digestInSoil digests data into an existing soil, registering the colony.
+func digestInSoil(soil *mushroom.Soil, substrate *Substrate, url string, data string) (*Mycelium, error) {
+	hypha, err := soil.Hypha(url)
+	if err != nil {
+		return nil, err
+	}
+	got, err := substrate.Digest(hypha, data, soil)
+	if err != nil {
+		return nil, err
+	}
+	soil.AddColony(got)
+	return got.(*Mycelium), nil
+}
+
 func TestMyceliumImplementsMushroomMycelium(t *testing.T) {
 	var _ mushroom.Mycelium = (*Mycelium)(nil)
 }
@@ -944,6 +958,166 @@ func TestPruneService(t *testing.T) {
 		if obj["name"] == "entrypoint" {
 			t.Fatalf("services[%d] still has name %q after prune", i, "entrypoint")
 		}
+	}
+}
+
+func TestInoculateReplacesModuleRoot(t *testing.T) {
+	m, err := digest("pkg:json$#config.json", `{"services":[{"name":"old"}]}`)
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+
+	replacement := `{"services":[{"name":"new"}]}`
+	if err := m.Inoculate("pkg:json$#config.json", replacement); err != nil {
+		t.Fatalf("Inoculate(module root): %v", err)
+	}
+
+	got, err := m.Spore("*pkg:$?var=services[0].name")
+	if err != nil {
+		t.Fatalf("Spore(services[0].name): %v", err)
+	}
+	if got != "new" {
+		t.Fatalf("services[0].name = %v, want %q", got, "new")
+	}
+}
+
+func TestInoculateForwardsToOtherModule(t *testing.T) {
+	soil := &mushroom.Soil{}
+	pattern, err := soil.Hypha("pkg:json/$#$.json")
+	if err != nil {
+		t.Fatalf("Hypha(pattern): %v", err)
+	}
+	substrate := &Substrate{url: pattern}
+	if err := soil.AddSubstrate(substrate); err != nil {
+		t.Fatalf("AddSubstrate: %v", err)
+	}
+
+	primary, err := digestInSoil(soil, substrate, "pkg:json$#primary.json", `{"label":"primary","services":[]}`)
+	if err != nil {
+		t.Fatalf("digestInSoil(primary): %v", err)
+	}
+	other, err := digestInSoil(soil, substrate, "pkg:json$#other.json", `{"services":[{"name":"keep"}]}`)
+	if err != nil {
+		t.Fatalf("digestInSoil(other): %v", err)
+	}
+
+	newServices := []any{map[string]any{"name": "forwarded"}}
+	if err := primary.Inoculate("pkg:json$#other.json?var=services", newServices); err != nil {
+		t.Fatalf("Inoculate(other module): %v", err)
+	}
+
+	got, err := other.Spore("*pkg:$?var=services")
+	if err != nil {
+		t.Fatalf("Spore(other.services): %v", err)
+	}
+	services, ok := got.([]any)
+	if !ok || len(services) != 1 {
+		t.Fatalf("other.services = %T len %d, want one item", got, len(services))
+	}
+	svc, ok := services[0].(map[string]any)
+	if !ok || svc["name"] != "forwarded" {
+		t.Fatalf("other.services[0].name = %v, want %q", svc["name"], "forwarded")
+	}
+
+	got, err = primary.Spore("*pkg:$?var=label")
+	if err != nil {
+		t.Fatalf("Spore(primary.label): %v", err)
+	}
+	if got != "primary" {
+		t.Fatalf("primary.label = %v, want %q", got, "primary")
+	}
+}
+
+func TestGraftForwardsToOtherModule(t *testing.T) {
+	soil := &mushroom.Soil{}
+	pattern, err := soil.Hypha("pkg:json/$#$.json")
+	if err != nil {
+		t.Fatalf("Hypha(pattern): %v", err)
+	}
+	substrate := &Substrate{url: pattern}
+	if err := soil.AddSubstrate(substrate); err != nil {
+		t.Fatalf("AddSubstrate: %v", err)
+	}
+
+	primary, err := digestInSoil(soil, substrate, "pkg:json$#primary.json", `{"services":[]}`)
+	if err != nil {
+		t.Fatalf("digestInSoil(primary): %v", err)
+	}
+	other, err := digestInSoil(soil, substrate, "pkg:json$#other.json", `{"services":[{"name":"existing"}]}`)
+	if err != nil {
+		t.Fatalf("digestInSoil(other): %v", err)
+	}
+
+	if err := primary.Graft("pkg:json$#other.json?var=services", map[string]any{"name": "grafted"}); err != nil {
+		t.Fatalf("Graft(other module): %v", err)
+	}
+
+	got, err := other.Spore("*pkg:$?var=services")
+	if err != nil {
+		t.Fatalf("Spore(other.services): %v", err)
+	}
+	services, ok := got.([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("len(other.services) = %d, want 2", len(services))
+	}
+	last, ok := services[1].(map[string]any)
+	if !ok || last["name"] != "grafted" {
+		t.Fatalf("other.services[1].name = %v, want %q", last["name"], "grafted")
+	}
+}
+
+func TestPruneForwardsToOtherModule(t *testing.T) {
+	soil := &mushroom.Soil{}
+	pattern, err := soil.Hypha("pkg:json/$#$.json")
+	if err != nil {
+		t.Fatalf("Hypha(pattern): %v", err)
+	}
+	substrate := &Substrate{url: pattern}
+	if err := soil.AddSubstrate(substrate); err != nil {
+		t.Fatalf("AddSubstrate: %v", err)
+	}
+
+	primary, err := digestInSoil(soil, substrate, "pkg:json$#primary.json", `{"services":[]}`)
+	if err != nil {
+		t.Fatalf("digestInSoil(primary): %v", err)
+	}
+	if _, err := digestInSoil(soil, substrate, "pkg:json$#other.json", `{"services":[{"name":"drop"},{"name":"keep"}]}`); err != nil {
+		t.Fatalf("digestInSoil(other): %v", err)
+	}
+
+	if err := primary.Prune("pkg:json$#other.json?var=services[name:drop]"); err != nil {
+		t.Fatalf("Prune(other module): %v", err)
+	}
+
+	got, err := primary.Spore("*pkg:json$#other.json?var=services")
+	if err != nil {
+		t.Fatalf("Spore(other.services): %v", err)
+	}
+	services, ok := got.([]any)
+	if !ok || len(services) != 1 {
+		t.Fatalf("len(other.services) = %d, want 1", len(services))
+	}
+	svc, ok := services[0].(map[string]any)
+	if !ok || svc["name"] != "keep" {
+		t.Fatalf("other.services[0].name = %v, want %q", svc["name"], "keep")
+	}
+}
+
+func TestInoculateMissingModuleReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"services":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	link := "pkg:json/" + dir + "#config.json"
+	m, err := Root(link)
+	if err != nil {
+		t.Fatalf("Root: %v", err)
+	}
+
+	err = m.Inoculate("pkg:json/"+dir+"#missing.json?var=services", []any{map[string]any{"name": "x"}})
+	if err == nil {
+		t.Fatal("Inoculate(missing module): expected error, got nil")
 	}
 }
 

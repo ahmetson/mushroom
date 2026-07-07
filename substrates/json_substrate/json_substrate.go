@@ -390,11 +390,93 @@ func (mycelium *Mycelium) inoculateLocal(hypha mushroom.Hypha, value any) error 
 		mycelium.data = decoded
 		return nil
 	}
+
+	// Before overwriting, restore any mushroom dereference strings that the caller
+	// received as resolved values (via Fruit) but did not intentionally change.
+	// This prevents round-trip writes from permanently baking resolved env-var values
+	// (e.g. "*pkg:os/env?var=API_KEY") into the JSON file.
+	if valueMap, ok := value.(map[string]any); ok {
+		if rawCurrent, err := lookup(mycelium.data, hypha.ResourcePath); err == nil {
+			raw := rawCurrent
+			// Filtered paths (e.g. services[name:ai]) return []any; unwrap the single element.
+			if items, ok := rawCurrent.([]any); ok && len(items) == 1 {
+				raw = items[0]
+			}
+			if fruited, err := mycelium.Fruit(raw); err == nil {
+				inoculateRestoreDerefs(valueMap, raw, fruited)
+			}
+		}
+	}
+
 	parent, last, err := mycelium.navigateToParent(hypha.ResourcePath.Segments)
 	if err != nil {
 		return err
 	}
 	return applySetToParent(parent, last, value)
+}
+
+// inoculateRestoreDerefs recursively restores mushroom dereference strings in dst
+// that the caller did not intentionally change.
+//
+// spored is the raw current value (dereference strings intact).
+// fruited is the Fruit-resolved version of spored.
+//
+// For each field in spored whose value is a dereference string (starts with '*'):
+//   - If dst[k] equals fruited[k] the caller did not change the field — restore the
+//     dereference string so it is not permanently baked into the JSON file.
+//   - If dst[k] differs from fruited[k] the caller intentionally wrote a new value —
+//     leave dst[k] as-is.
+func inoculateRestoreDerefs(dst map[string]any, spored any, fruited any) {
+	sporedMap, ok := spored.(map[string]any)
+	if !ok {
+		return
+	}
+	fruitedMap, _ := fruited.(map[string]any)
+
+	for k, sporedVal := range sporedMap {
+		dstVal, exists := dst[k]
+		if !exists {
+			continue
+		}
+		var fruitedVal any
+		if fruitedMap != nil {
+			fruitedVal = fruitedMap[k]
+		}
+		dst[k] = inoculateRestoreDerefValue(dstVal, sporedVal, fruitedVal)
+	}
+}
+
+// inoculateRestoreDerefValue returns the value to store for a single field.
+func inoculateRestoreDerefValue(dst any, spored any, fruited any) any {
+	switch sv := spored.(type) {
+	case string:
+		if len(sv) > 0 && sv[0] == '*' && fmt.Sprintf("%v", dst) == fmt.Sprintf("%v", fruited) {
+			return sv
+		}
+	case map[string]any:
+		dstMap, ok := dst.(map[string]any)
+		if !ok {
+			return dst
+		}
+		inoculateRestoreDerefs(dstMap, sv, fruited)
+	case []any:
+		dstSlice, ok := dst.([]any)
+		if !ok {
+			return dst
+		}
+		fruitedSlice, _ := fruited.([]any)
+		for i, sporedElem := range sv {
+			if i >= len(dstSlice) {
+				break
+			}
+			var fruitedElem any
+			if i < len(fruitedSlice) {
+				fruitedElem = fruitedSlice[i]
+			}
+			dstSlice[i] = inoculateRestoreDerefValue(dstSlice[i], sporedElem, fruitedElem)
+		}
+	}
+	return dst
 }
 
 func decodeMutationValue(value any) (any, error) {

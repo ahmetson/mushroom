@@ -1455,3 +1455,139 @@ func TestHyphaLambdaComposition(t *testing.T) {
 	})
 }
 
+// TestInoculatePreservesDereferenceUnchanged verifies that when a service is written
+// back via Inoculate and the caller did NOT change a field that holds a dereference
+// string in the stored JSON, the dereference string is preserved (not replaced by the
+// resolved value).
+//
+// Setup: the JSON has a root-level "secret" key and a service whose "api-key"
+// parameter is "*pkg:$?var=secret" (a dereference to that key). When the caller
+// reads the service (Fruit resolves api-key to "my-secret"), adds a new parameter
+// "extra", and writes back, the api-key must remain the dereference string.
+func TestInoculatePreservesDereferenceUnchanged(t *testing.T) {
+	const rawJSON = `{
+		"secret": "my-secret",
+		"services": [{
+			"name": "ai",
+			"type": "Extension",
+			"parameters": {
+				"api-key": "*pkg:$?var=secret",
+				"model":   "claude-haiku"
+			}
+		}]
+	}`
+	m, err := digest("pkg:json$#config.json", rawJSON)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+
+	// Read the service through Fruit so api-key is resolved to "my-secret".
+	spored, err := m.Spore("*pkg:$?var=services[name:ai]")
+	if err != nil {
+		t.Fatalf("Spore: %v", err)
+	}
+	items, ok := spored.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("Spore returned %T (len %d), want []any of length 1", spored, len(items))
+	}
+	fruited, err := m.Fruit(items[0])
+	if err != nil {
+		t.Fatalf("Fruit: %v", err)
+	}
+	svcMap, ok := fruited.(map[string]any)
+	if !ok {
+		t.Fatalf("fruited is %T, want map", fruited)
+	}
+	params, ok := svcMap["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters is %T, want map", svcMap["parameters"])
+	}
+	if params["api-key"] != "my-secret" {
+		t.Fatalf("resolved api-key = %v, want %q", params["api-key"], "my-secret")
+	}
+
+	// Caller adds a new parameter without touching api-key.
+	params["extra"] = "new-value"
+
+	// Write back via Inoculate.
+	if err := m.Inoculate("pkg:$?var=services[name:ai]", svcMap); err != nil {
+		t.Fatalf("Inoculate: %v", err)
+	}
+
+	// Read raw data again — api-key must be the dereference string, not "my-secret".
+	raw2, err := m.Spore("*pkg:$?var=services[name:ai]")
+	if err != nil {
+		t.Fatalf("Spore after inoculate: %v", err)
+	}
+	items2, _ := raw2.([]any)
+	if len(items2) != 1 {
+		t.Fatalf("Spore returned %d items after inoculate, want 1", len(items2))
+	}
+	p2, ok := items2[0].(map[string]any)
+	if !ok {
+		t.Fatalf("service after inoculate is %T, want map", items2[0])
+	}
+	params2, _ := p2["parameters"].(map[string]any)
+	if params2["api-key"] != "*pkg:$?var=secret" {
+		t.Errorf("api-key after inoculate = %v, want dereference %q", params2["api-key"], "*pkg:$?var=secret")
+	}
+	if params2["extra"] != "new-value" {
+		t.Errorf("extra after inoculate = %v, want %q", params2["extra"], "new-value")
+	}
+	if params2["model"] != "claude-haiku" {
+		t.Errorf("model after inoculate = %v, want %q", params2["model"], "claude-haiku")
+	}
+}
+
+// TestInoculateOverwritesDereferenceWhenChanged verifies that when the caller
+// intentionally sets a field to a value different from the resolved dereference,
+// the new value is written and the dereference string is NOT restored.
+func TestInoculateOverwritesDereferenceWhenChanged(t *testing.T) {
+	const rawJSON = `{
+		"secret": "my-secret",
+		"services": [{
+			"name": "ai",
+			"type": "Extension",
+			"parameters": {
+				"api-key": "*pkg:$?var=secret",
+				"model":   "claude-haiku"
+			}
+		}]
+	}`
+	m, err := digest("pkg:json$#config.json", rawJSON)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+
+	// Read the service through Fruit so api-key is resolved.
+	spored, err := m.Spore("*pkg:$?var=services[name:ai]")
+	if err != nil {
+		t.Fatalf("Spore: %v", err)
+	}
+	items, _ := spored.([]any)
+	fruited, err := m.Fruit(items[0])
+	if err != nil {
+		t.Fatalf("Fruit: %v", err)
+	}
+	svcMap := fruited.(map[string]any)
+	params := svcMap["parameters"].(map[string]any)
+
+	// Caller intentionally replaces api-key with a different hardcoded value.
+	params["api-key"] = "hardcoded-key"
+
+	if err := m.Inoculate("pkg:$?var=services[name:ai]", svcMap); err != nil {
+		t.Fatalf("Inoculate: %v", err)
+	}
+
+	// Raw data must hold the new hardcoded value, not the dereference string.
+	raw2, err := m.Spore("*pkg:$?var=services[name:ai]")
+	if err != nil {
+		t.Fatalf("Spore after inoculate: %v", err)
+	}
+	items2, _ := raw2.([]any)
+	p2 := items2[0].(map[string]any)
+	params2 := p2["parameters"].(map[string]any)
+	if params2["api-key"] != "hardcoded-key" {
+		t.Errorf("api-key after inoculate = %v, want %q", params2["api-key"], "hardcoded-key")
+	}
+}

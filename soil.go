@@ -599,6 +599,8 @@ func isConcreteDefault(h Hypha) bool {
 	return true
 }
 
+// String returns the string representation of the hypha.
+// For empty package it puts the $ wildcard.
 func (hypha Hypha) String() string {
 	if !hypha.URL {
 		return hypha.Path
@@ -623,14 +625,13 @@ func (hypha Hypha) String() string {
 	builder.WriteString(packageID)
 
 	moduleID := hypha.ModuleID
-	if moduleID == "" {
-		moduleID = "$"
+	if moduleID != "" {
+		builder.WriteString("#")
+		if hypha.Dereference && hypha.DereferenceType == DereferenceTypeModule {
+			builder.WriteString("*")
+		}
+		builder.WriteString(moduleID)
 	}
-	builder.WriteString("#")
-	if hypha.Dereference && hypha.DereferenceType == DereferenceTypeModule {
-		builder.WriteString("*")
-	}
-	builder.WriteString(moduleID)
 
 	resource := hypha.resourceString()
 	if resource != "" {
